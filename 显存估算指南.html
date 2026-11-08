@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>大模型训练显存估算指南</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+    --s4: #eda100;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --on-yellow: #0b0b0b;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --on-yellow: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+      --s4: #c98500;
+      --on-yellow: #ffffff;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .page { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
+
+  header.page-head { padding: 8px 0 4px; }
+  header.page-head h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header.page-head p { color: var(--text-secondary); margin: 0; }
+  .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+
+  .theme-btn {
+    flex: none; margin-top: 4px;
+    background: var(--surface-1); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  .theme-btn:hover { color: var(--text-primary); }
+
+  section { margin-top: 48px; }
+  section > h2 { font-size: 21px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .section-sub { color: var(--text-secondary); margin: 0 0 20px; }
+
+  .formula-box {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-family: ui-monospace, Consolas, "Courier New", monospace;
+    font-size: 15px;
+    margin: 0 0 20px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .formula-box b { color: var(--text-primary); font-weight: 600; }
+  .formula-box .op { color: var(--text-muted); }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+  }
+
+  /* ---- 组成卡片 ---- */
+  .comp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 24px; }
+  @media (max-width: 680px) { .comp-grid { grid-template-columns: 1fr; } }
+  .comp-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .comp-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .sw1 { background: var(--s1); } .sw2 { background: var(--s2); }
+  .sw3 { background: var(--s3); } .sw4 { background: var(--s4); }
+  .comp-card .eq { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--text-secondary); margin: 0 0 6px; }
+  .comp-card .ex { font-size: 13px; color: var(--text-muted); margin: 0; }
+  .comp-card .ex b { color: var(--text-secondary); font-weight: 600; }
+
+  /* ---- 分段条 ---- */
+  figure.chart { margin: 0; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; }
+  figure.chart figcaption { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+  .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chart-title { font-weight: 600; font-size: 15px; }
+  .chart-total { font-size: 13px; color: var(--text-secondary); }
+  .chart-total b { color: var(--text-primary); font-size: 15px; }
+
+  .bar-wrap { position: relative; padding-top: 22px; }
+  .segbar { display: flex; gap: 2px; height: 28px; }
+  .seg {
+    position: relative; min-width: 3px; border-radius: 4px;
+    display: flex; align-items: center; overflow: hidden;
+    transition: flex-grow 0.2s ease;
+    cursor: default;
+  }
+  .seg:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
+  .seg-label { font-size: 12px; font-weight: 600; color: #fff; padding: 0 8px; white-space: nowrap; }
+  .seg-label.on-yellow { color: var(--on-yellow); }
+  .gpu-line { position: absolute; top: 16px; bottom: -6px; width: 2px; background: var(--baseline); }
+  .gpu-line span {
+    position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: var(--text-muted); white-space: nowrap;
+  }
+  .oom-zone { position: absolute; top: 22px; bottom: 0; right: 0; background: rgba(208,59,59,0.07); border-radius: 0 4px 4px 0; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
+
+  /* ---- 表格 ---- */
+  table.data { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+  table.data th {
+    text-align: left; font-size: 12.5px; font-weight: 600; color: var(--text-secondary);
+    border-bottom: 1px solid var(--baseline); padding: 8px 10px;
+  }
+  table.data td { border-bottom: 1px solid var(--grid); padding: 8px 10px; }
+  table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data tr:last-child td { border-bottom: none; }
+  table.data td.total { font-weight: 600; }
+
+  .tgl-btn {
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary); font-size: 13px; padding: 4px 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  .tgl-btn:hover { color: var(--text-primary); }
+  .tgl-btn[aria-pressed="true"] { background: var(--surface-1); color: var(--text-primary); }
+  .tbl-view { display: none; }
+  .tbl-view.open { display: block; }
+
+  /* ---- 热力图 ---- */
+  .hm-scroll { overflow-x: auto; }
+  .hm { display: grid; grid-template-columns: 76px repeat(4, minmax(104px, 1fr)); gap: 2px; min-width: 560px; }
+  .hm-corner { font-size: 12px; color: var(--text-muted); align-self: end; padding: 0 4px 6px; }
+  .hm-col { text-align: center; padding: 4px 2px 8px; }
+  .hm-col .m-name { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+  .hm-col .m-coef { font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .hm-row { font-size: 13px; color: var(--text-secondary); align-self: center; padding-right: 8px; text-align: right; font-variant-numeric: tabular-nums; }
+  .hm-cell {
+    height: 52px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums;
+    cursor: default;
+  }
+  .hm-cell:hover { filter: brightness(1.08); }
+  .hm-cell:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+  .scale-legend { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 12px; color: var(--text-muted); }
+  .scale-bar { flex: 1; max-width: 260px; height: 10px; border-radius: 5px; }
+
+  /* ---- 计算器 ---- */
+  .calc-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-bottom: 22px; }
+  @media (max-width: 680px) { .calc-controls { grid-template-columns: 1fr; } }
+  .ctrl-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  .ctrl-label output { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .ctrl-hint { font-size: 12px; color: var(--text-muted); font-weight: 400; margin-top: 6px; }
+  input[type="range"] { width: 100%; accent-color: var(--s1); }
+  select {
+    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); font-family: inherit; font-size: 14px;
+  }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { position: relative; }
+  .pill input { position: absolute; opacity: 0; pointer-events: none; }
+  .pill span {
+    display: inline-block; padding: 6px 13px; border-radius: 999px; font-size: 13px;
+    border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; user-select: none;
+  }
+  .pill input:checked + span { background: var(--s1); border-color: var(--s1); color: #fff; font-weight: 600; }
+  .pill input:focus-visible + span { outline: 2px solid var(--s1); outline-offset: 2px; }
+
+  .calc-result { display: grid; grid-template-columns: 230px 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 760px) { .calc-result { grid-template-columns: 1fr; } }
+  .hero-label { font-size: 13px; color: var(--text-secondary); }
+  .hero-value { font-size: 48px; font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; }
+  .hero-unit { font-size: 22px; font-weight: 600; color: var(--text-secondary); margin-left: 2px; }
+
+  .verdict {
+    display: flex; gap: 10px; align-items: flex-start;
+    border-radius: 10px; padding: 10px 14px; margin-top: 16px;
+    border: 1px solid var(--border);
+  }
+  .v-icon { font-size: 16px; line-height: 1.5; flex: none; }
+  .v-title { font-weight: 600; font-size: 14px; }
+  .v-desc { font-size: 12.5px; color: var(--text-secondary); }
+  .verdict.v-good { background: rgba(12,163,12,0.08); }
+  .verdict.v-good .v-icon { color: var(--good); }
+  .verdict.v-warn { background: rgba(250,178,25,0.10); }
+  .verdict.v-warn .v-icon { color: var(--warning); }
+  .verdict.v-crit { background: rgba(208,59,59,0.08); }
+  .verdict.v-crit .v-icon { color: var(--critical); }
+
+  .quick-check { font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+  .quick-check code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; background: var(--page); border: 1px solid var(--grid); border-radius: 5px; padding: 1px 6px; }
+
+  /* ---- 流程 ---- */
+  .steps { counter-reset: step; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 680px) { .steps { grid-template-columns: 1fr; } }
+  .step { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    display: inline-flex; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--s1); color: #fff; font-size: 13px; font-weight: 600;
+    align-items: center; justify-content: center; margin-bottom: 8px;
+  }
+  .step h3 { margin: 0 0 4px; font-size: 14.5px; }
+  .step p { margin: 0; font-size: 13px; color: var(--text-secondary); }
+
+  .note-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-top: 14px; }
+  .note-card h3 { margin: 0 0 6px; font-size: 14.5px; }
+  .note-card p { margin: 0; font-size: 13px; color: var(--text-secondary); }
+
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--grid); }
+  footer p { font-size: 12.5px; color: var(--text-muted); margin: 0 0 6px; }
+
+  /* ---- Tooltip ---- */
+  #tooltip {
+    position: fixed; z-index: 50; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    padding: 9px 12px; max-width: 260px;
+  }
+  .tt-row { display: flex; align-items: center; gap: 7px; }
+  .tt-key { width: 12px; height: 3px; border-radius: 2px; flex: none; }
+  .tt-name { font-size: 12px; color: var(--text-secondary); }
+  .tt-val { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
+  .tt-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; font-family: ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="page-head">
+    <div class="head-row">
+      <div>
+        <h1>大模型训练显存估算指南</h1>
+        <p>从构成分解到快速系数法 —— 以 Qwen2.5-VL-3B LoRA 微调为例</p>
+      </div>
+      <button class="theme-btn" id="theme-toggle" type="button">深色模式</button>
+    </div>
+  </header>
+
+  <!-- ===================== 方法一:精确构成 ===================== -->
+  <section id="anatomy">
+    <h2>方法一:精确构成分解</h2>
+    <p class="section-sub">把峰值显存拆成四项,逐项估算后相加。适合理解原理、OOM 后定位瓶颈。</p>
+
+    <div class="formula-box"><b>总显存</b> <span class="op">=</span> 模型权重 <span class="op">+</span> 训练状态(梯度+优化器) <span class="op">+</span> 激活值 <span class="op">+</span> CUDA开销</div>
+
+    <div class="comp-grid">
+      <div class="comp-card">
+        <div class="comp-head"><span class="swatch sw1"></span>模型权重</div>
+        <p class="eq">参数量 × 每参数字节数</p>
+        <p class="ex">bf16 每参数 2 字节。只要模型在显存里,这部分跑不掉。<br><b>例:3.75B × 2B = 7.5 GB</b></p>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="swatch sw2"></span>训练状态(梯度+优化器)</div>
+        <p class="eq">可训练参数量 × 每参数字节数</p>
+        <p class="ex">只对可训练参数计费。LoRA 把它压缩到总参数的 ~1.3%。<br><b>例:50M × 6B ≈ 0.3 GB</b></p>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="swatch sw3"></span>激活值</div>
+        <p class="eq">∝ 单步 token 数(batch × 序列长度)× 层数</p>
+        <p class="ex">前向中间结果,反向传播要用。按“一次喂进模型的 token 量”计费,与数据集总量无关。梯度检查点把它压到 1/5~1/10;视觉模型中图片 token 数是最大变量。<b>例:2~4 GB</b></p>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="swatch sw4"></span>CUDA 开销</div>
+        <p class="eq">内核工作区 + 显存碎片</p>
+        <p class="ex">显卡初始化与分配器预留,基本固定。<b>例:~1 GB</b></p>
+      </div>
+    </div>
+
+    <figure class="chart" aria-label="Qwen2.5-VL-3B LoRA 微调显存构成分段条">
+      <div class="chart-head">
+        <span class="chart-title">示例:Qwen2.5-VL-3B(实际 3.75B)· LoRA bf16 · 中等序列</span>
+        <span class="chart-total">合计 <b>≈ 11.8 GB</b></span>
+      </div>
+      <div class="bar-wrap">
+        <div class="segbar" id="example-bar"></div>
+      </div>
+      <div class="legend" id="example-legend"></div>
+      <figcaption>悬停或用键盘 Tab 聚焦查看每段数值;“训练状态”一段过窄不显示内嵌标签,数值在下方数据表中。</figcaption>
+      <div style="margin-top:12px">
+        <button class="tgl-btn" type="button" aria-pressed="false" data-target="example-table">查看数据表</button>
+      </div>
+      <div class="tbl-view" id="example-table">
+        <table class="data">
+          <thead><tr><th>组成</th><th class="num">大小</th><th class="num">占比</th></tr></thead>
+          <tbody>
+            <tr><td>模型权重</td><td class="num">7.5 GB</td><td class="num">64%</td></tr>
+            <tr><td>训练状态(LoRA)</td><td class="num">0.3 GB</td><td class="num">2.5%</td></tr>
+            <tr><td>激活值</td><td class="num">3.0 GB</td><td class="num">25%</td></tr>
+            <tr><td>CUDA 开销</td><td class="num">1.0 GB</td><td class="num">8.5%</td></tr>
+            <tr><td class="total">合计</td><td class="num total">≈ 11.8 GB</td><td class="num">100%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </figure>
+
+    <div class="card" style="margin-top:14px">
+      <table class="data" style="margin-top:0">
+        <thead><tr><th>每参数显存成本速查</th><th class="num">字节/参数</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>权重 bf16</td><td class="num">2</td><td>最常见的底座精度</td></tr>
+          <tr><td>权重 fp32</td><td class="num">4</td><td>—</td></tr>
+          <tr><td>权重 4bit(QLoRA)</td><td class="num">0.5</td><td>底座量化</td></tr>
+          <tr><td>梯度 bf16</td><td class="num">2</td><td>仅可训练参数</td></tr>
+          <tr><td>优化器 8bit 动量 ×2</td><td class="num">2</td><td>adamw_8bit</td></tr>
+          <tr><td>优化器 fp32 动量 ×2</td><td class="num">8</td><td>标准 AdamW</td></tr>
+          <tr><td>fp32 master 副本</td><td class="num">4</td><td>混合精度全量微调需要</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:var(--text-secondary);margin:12px 0 0">
+        全量微调(fp32 AdamW)总账 = 2 + 2 + 4 + 8 = <b>16 字节/参数</b> → 3.75B 模型 ≈ 60 GB,还没算激活值。
+        这就是 LoRA 的意义:把这一项从 50+ GB 压到 0.3 GB。
+      </p>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3 style="margin:0 0 10px;font-size:14.5px">激活值完整公式(按 token 计费)</h3>
+      <div class="formula-box"><b>激活值</b> <span class="op">≈</span> (<b>batch × 序列长度</b>) <span class="op">×</span> <b>层数</b> <span class="op">×</span> <b>h</b> <span class="op">×</span> <b>2字节</b> <span class="op">×</span> <b>份数</b> <span class="op">+</span> <b>logits</b></div>
+      <table class="data">
+        <thead><tr><th>元素</th><th>含义</th><th>典型值 / 查法</th></tr></thead>
+        <tbody>
+          <tr><td>batch × 序列长度</td><td>单步喂进模型的总 token 量。序列长度 = 每条输入的 token 数;数据集总量与显存无关,只影响训练时长</td><td>由数据形态决定</td></tr>
+          <tr><td>层数 L</td><td>Transformer 块的个数,不是张量总数</td><td>config.json 的 num_hidden_layers(3B≈36,7B≈28)</td></tr>
+          <tr><td>h</td><td>hidden size,每个 token 的向量长度(模型的“宽度”)</td><td>config.json 的 hidden_size(3B≈2048,7B≈3584)</td></tr>
+          <tr><td>2 字节</td><td>bf16 下每个元素的字节数</td><td>fp16 同为 2,fp32 为 4</td></tr>
+          <tr><td>份数</td><td>每层每个 token 要保存几份 h 维向量:开梯度检查点 1 份(只存层输入),不开约 17 份</td><td>LoRA/QLoRA 工具链默认开检查点</td></tr>
+          <tr><td>logits</td><td>输出层对词表的打分 = 单步 token 数 × 词表 × 2字节;反向一开始就要用,检查点省不掉</td><td>Qwen 词表约 15 万</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--text-muted);margin:10px 0 0">心算捷径:开检查点时每 token 总价约 0.5~1 MB(含 logits),直接乘单步 token 数。例:3B 模型、5k token → 0.7 GB + logits 1.5 GB ≈ 2.2 GB,对应计算器“中”档。</p>
+    </div>
+  </section>
+
+  <!-- ===================== 方法二:快速系数法 ===================== -->
+  <section id="quick">
+    <h2>方法二:快速系数法</h2>
+    <p class="section-sub">选型阶段只需要一次乘法。层数、hidden dim 等细节在这个精度下全部被总参数量吸收。</p>
+
+    <div class="formula-box"><b>所需显存</b> <span class="op">≈</span> 参数量(B) <span class="op">×</span> 系数 <span class="op">+</span> 固定开销(3~6 GB)</div>
+
+    <div class="card" style="margin-bottom:14px">
+      <table class="data" style="margin-top:0">
+        <thead><tr><th>训练方式</th><th class="num">系数(GB / 每 1B 参数)</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>LoRA(bf16 底座)</td><td class="num">~2.0</td><td>权重大头,LoRA 训练状态可忽略</td></tr>
+          <tr><td>QLoRA(4bit 底座)</td><td class="num">~0.6</td><td>底座量化到 4bit,最省</td></tr>
+          <tr><td>全量微调(8bit 优化器)</td><td class="num">~7</td><td>权重+梯度+优化器全量存</td></tr>
+          <tr><td>全量微调(fp32 AdamW)</td><td class="num">~16</td><td>最贵的方式</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--text-muted);margin:10px 0 0">固定开销(3~6 GB)= 激活值 + CUDA 开销的打包估计,主要看单步输入的 token 总量(batch × 序列长度;视觉模型看图片分辨率折算的 token 数),与模型大小关系不大。</p>
+    </div>
+
+    <figure class="chart" aria-label="不同参数量与训练方式的显存需求热力图">
+      <div class="chart-head">
+        <span class="chart-title">显存需求全景:参数量 × 训练方式(GB)</span>
+        <button class="tgl-btn" type="button" aria-pressed="false" data-target="hm-table">查看数据表</button>
+      </div>
+      <div class="hm-scroll"><div class="hm" id="hm-grid"></div></div>
+      <div class="scale-legend">
+        <span>≈5 GB</span>
+        <div class="scale-bar" id="scale-bar"></div>
+        <span>≈1,124 GB</span>
+        <span>· 颜色按对数映射,格内为估算峰值</span>
+      </div>
+      <figcaption>按模型卡标称规模计算(标称 3B 的模型实际约 3.75B),结果为数量级参考。</figcaption>
+      <div class="tbl-view" id="hm-table">
+        <table class="data" id="hm-table-inner"></table>
+      </div>
+    </figure>
+
+    <div class="card" style="margin-top:14px">
+      <table class="data" style="margin-top:0">
+        <thead><tr><th>显存</th><th>LoRA bf16</th><th>QLoRA 4bit</th><th>全量微调</th></tr></thead>
+        <tbody>
+          <tr><td>16 GB</td><td>3~4B</td><td>14B</td><td>1B 左右</td></tr>
+          <tr><td><b>24 GB</b></td><td><b>7~8B</b></td><td>14B 稳 / 32B 勉强</td><td>2B</td></tr>
+          <tr><td>48 GB</td><td>14B 稳 / 20B 勉强</td><td>32B~70B</td><td>5~7B</td></tr>
+          <tr><td>80 GB</td><td>32B / 70B 勉强</td><td>70B 稳</td><td>10~14B</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--text-muted);margin:10px 0 0">反查表:你的卡 → 能训的最大模型。最终选卡再乘 1.5~2 的安全系数。</p>
+    </div>
+  </section>
+
+  <!-- ===================== 计算器 ===================== -->
+  <section id="calc">
+    <h2>交互式计算器</h2>
+    <p class="section-sub">按方法一的构成分解实时计算,并与快速公式交叉验证。</p>
+
+    <div class="card">
+      <div class="calc-controls">
+        <div>
+          <div class="ctrl-label"><span>实际参数量</span><output id="p-out">3.75 B</output></div>
+          <input type="range" id="p-slider" min="0.5" max="72" step="0.25" value="3.75" aria-label="实际参数量,单位十亿">
+          <p class="ctrl-hint">模型卡标称 3B 的模型实际约 3.75B(语言 3B + 视觉塔 0.7B)</p>
+        </div>
+        <div>
+          <div class="ctrl-label"><span>训练方式</span></div>
+          <div class="pill-row" id="method-pills">
+            <label class="pill"><input type="radio" name="method" value="lora" checked><span>LoRA · bf16底座</span></label>
+            <label class="pill"><input type="radio" name="method" value="qlora"><span>QLoRA · 4bit底座</span></label>
+            <label class="pill"><input type="radio" name="method" value="full8"><span>全量 · 8bit优化器</span></label>
+            <label class="pill"><input type="radio" name="method" value="full32"><span>全量 · fp32 AdamW</span></label>
+          </div>
+        </div>
+        <div>
+          <div class="ctrl-label"><span>激活值规模</span></div>
+          <div class="pill-row" id="act-pills">
+            <label class="pill"><input type="radio" name="act" value="1.5"><span>短 ~2k token(1.5 GB)</span></label>
+            <label class="pill"><input type="radio" name="act" value="3" checked><span>中 ~5k token(3 GB)</span></label>
+            <label class="pill"><input type="radio" name="act" value="6"><span>长 ~1万+ token(6 GB)</span></label>
+          </div>
+          <p class="ctrl-hint">“序列长度”指每条输入的 token 数;激活值实际由单步总 token 量决定:batch × 序列长度(按钮上的 token 数指这个总量,batch≈1 时就等于序列长度)。三档按 3B 模型、开梯度检查点折算,batch 翻倍相当于升一档;数据集总量不影响显存,只影响训练时长。视觉模型按图片 token 数折算,高分辨率图取长序列档。</p>
+        </div>
+        <div>
+          <div class="ctrl-label"><span>GPU 显存</span></div>
+          <select id="gpu-select" aria-label="GPU 显存">
+            <option value="12">12 GB(RTX 3060)</option>
+            <option value="16">16 GB(T4 / 4060Ti)</option>
+            <option value="24" selected>24 GB(RTX 4090 / 3090)</option>
+            <option value="40">40 GB(A100 / A800)</option>
+            <option value="48">48 GB(L20 / A6000)</option>
+            <option value="80">80 GB(A100 / H100)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="calc-result">
+        <div>
+          <div class="hero-label">估算峰值显存</div>
+          <div class="hero-value"><span id="hero-num">≈ 11.8</span><span class="hero-unit">GB</span></div>
+          <div class="verdict v-good" id="verdict">
+            <span class="v-icon" id="v-icon">✓</span>
+            <div>
+              <div class="v-title" id="v-title">显存充足</div>
+              <div class="v-desc" id="v-desc">占 GPU 显存 49%,余量可用来加大 batch。</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="bar-wrap">
+            <div class="segbar" id="calc-bar"></div>
+            <div class="oom-zone" id="oom-zone" style="display:none"></div>
+            <div class="gpu-line" id="gpu-line" style="display:none"><span id="gpu-line-label">GPU 24 GB</span></div>
+          </div>
+          <div class="legend" id="calc-legend"></div>
+          <table class="data" id="calc-table">
+            <thead><tr><th>组成</th><th class="num">大小</th><th class="num">占比</th></tr></thead>
+            <tbody id="calc-tbody"></tbody>
+          </table>
+          <p class="quick-check" id="quick-check"></p>
+          <p class="ctrl-hint">竖线为 GPU 显存上限,右侧浅红区域为超出上限的 OOM 区。估算 ≈ 实测之间仍有方差,以训练时打印的 max_memory_reserved 为准。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 工程流程 ===================== -->
+  <section id="workflow">
+    <h2>工程上的正确姿势</h2>
+    <p class="section-sub">公式只用来圈候选名单(2 分钟),之后靠实测捕捉所有公式算不准的东西。</p>
+    <div class="steps">
+      <div class="step"><h3>圈候选</h3><p>用系数表反查,圈出 2~3 个候选模型。</p></div>
+      <div class="step"><h3>试跑</h3><p>保守 batch 起训,跑 20~50 步,盯 nvidia-smi 或脚本里的 max_memory_reserved。</p></div>
+      <div class="step"><h3>调参</h3><p>余量大就把 batch 翻倍;贴边了就加 gradient_accumulation_steps。</p></div>
+      <div class="step"><h3>升档</h3><p>峰值稳定后余量仍 &gt; 30%,说明还能往上试一档模型。</p></div>
+    </div>
+    <div class="note-card">
+      <h3>能训的最大 ≠ 该选的最好</h3>
+      <p>任务难度匹配:里程表读数这类感知任务 3B 微调后通常够用,提升数据质量比硬上 70B 划算。推理成本:训完要部署,70B 的 LoRA 推理需要 48GB 卡,3B 一张消费级卡就跑。</p>
+    </div>
+  </section>
+
+  <footer>
+    <p>· 本页估算针对训练;纯推理的显存由权重 + KV cache 决定,是另一套公式。</p>
+    <p>· GRPO 等训练与采样共存的场景(vLLM 同卡)需叠加推理引擎占用,见课程脚本 Qwen2_5_(7B)_R1_GRPO.py 的 gpu_memory_utilization 参数。</p>
+    <p>· 所有数字为数量级估算,以实测为准。</p>
+  </footer>
+</div>
+
+<div id="tooltip" role="status">
+  <div class="tt-row"><span class="tt-key" id="tt-key"></span><span class="tt-name" id="tt-name"></span></div>
+  <div class="tt-val" id="tt-val"></div>
+  <div class="tt-sub" id="tt-sub"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- 主题 ---------- */
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem('memguide-theme'); } catch (e) {}
+  var systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = saved || (systemDark ? 'dark' : 'light');
+
+  var toggleBtn = document.getElementById('theme-toggle');
+  function themeLabel() {
+    toggleBtn.textContent = root.dataset.theme === 'dark' ? '浅色模式' : '深色模式';
+  }
+  toggleBtn.addEventListener('click', function () {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('memguide-theme', root.dataset.theme); } catch (e) {}
+    themeLabel();
+    renderThemeDependent();
+  });
+
+  function isDark() { return root.dataset.theme === 'dark'; }
+
+  /* ---------- 工具 ---------- */
+  function fmt(v) {
+    if (v >= 100) return Math.round(v).toLocaleString('en-US');
+    return String(Math.round(v * 10) / 10);
+  }
+  function el(tag, cls, text) {
+    var d = document.createElement(tag);
+    if (cls) d.className = cls;
+    if (text != null) d.textContent = text;
+    return d;
+  }
+  function lum(hex) {
+    var r = parseInt(hex.slice(1, 3), 16) / 255;
+    var g = parseInt(hex.slice(3, 5), 16) / 255;
+    var b = parseInt(hex.slice(5, 7), 16) / 255;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  /* ---------- 分段条构建 ---------- */
+  function buildSegbar(barEl, legendEl, items, scale) {
+    barEl.textContent = '';
+    var total = 0;
+    items.forEach(function (it) { total += it.val; });
+    var pctSum = 0;
+    items.forEach(function (it) {
+      var pct = it.val / scale * 100;
+      pctSum += pct;
+      var seg = el('div', 'seg tt');
+      seg.style.flexGrow = pct;
+      seg.style.flexBasis = '0';
+      seg.style.background = 'var(--s' + it.slot + ')';
+      seg.tabIndex = 0;
+      seg.dataset.name = it.name;
+      seg.dataset.val = fmt(it.val) + ' GB';
+      seg.dataset.sub = '占 ' + Math.round(it.val / total * 1000) / 10 + '%';
+      seg.dataset.lab = fmt(it.val) + ' GB';
+      seg.dataset.slot = String(it.slot);
+      seg.setAttribute('aria-label', it.name + ':' + fmt(it.val) + ' GB,占 ' + Math.round(it.val / total * 100) + '%');
+      if (pct >= 7) {
+        var lab = el('span', 'seg-label' + (it.slot === 4 ? ' on-yellow' : ''), fmt(it.val) + ' GB');
+        seg.appendChild(lab);
+      }
+      barEl.appendChild(seg);
+    });
+    if (pctSum < 99.5) {
+      var spacer = el('div');
+      spacer.style.flexGrow = 100 - pctSum;
+      spacer.style.flexBasis = '0';
+      barEl.appendChild(spacer);
+    }
+    fitLabels(barEl);
+
+    if (legendEl) {
+      legendEl.textContent = '';
+      items.forEach(function (it) {
+        var item = el('div', 'legend-item');
+        item.appendChild(el('span', 'swatch sw' + it.slot));
+        item.appendChild(el('span', null, it.name));
+        legendEl.appendChild(item);
+      });
+    }
+  }
+  function fitLabels(barEl) {
+    Array.prototype.forEach.call(barEl.querySelectorAll('.seg'), function (seg) {
+      var lab = seg.querySelector('.seg-label');
+      var want = seg.dataset.lab;
+      if (want && seg.clientWidth >= 44) {
+        if (!lab) {
+          lab = el('span', 'seg-label' + (seg.dataset.slot === '4' ? ' on-yellow' : ''));
+          seg.appendChild(lab);
+        }
+        lab.textContent = want;
+      }
+      if (lab && seg.clientWidth < lab.scrollWidth + 12) lab.remove();
+    });
+  }
+  window.addEventListener('resize', function () {
+    fitLabels(document.getElementById('example-bar'));
+    fitLabels(document.getElementById('calc-bar'));
+    positionGpuLine();
+  });
+
+  /* ---------- 示例分段条 ---------- */
+  var EXAMPLE_ITEMS = [
+    { name: '模型权重', val: 7.5, slot: 1 },
+    { name: '训练状态(LoRA)', val: 0.3, slot: 2 },
+    { name: '激活值', val: 3.0, slot: 3 },
+    { name: 'CUDA 开销', val: 1.0, slot: 4 }
+  ];
+  var exampleTotal = EXAMPLE_ITEMS.reduce(function (s, it) { return s + it.val; }, 0);
+  buildSegbar(document.getElementById('example-bar'), document.getElementById('example-legend'), EXAMPLE_ITEMS, exampleTotal);
+
+  /* ---------- 热力图 ---------- */
+  var RAMP = ['#cde2fb', '#b7d3f6', '#9ec5f4', '#86b6ef', '#6da7ec', '#5598e7', '#3987e5', '#2a78d6', '#256abf', '#1c5cab', '#184f95', '#104281', '#0d366b'];
+  var HM_PARAMS = [1.5, 3, 7, 14, 32, 70];
+  var HM_METHODS = [
+    { name: 'LoRA (bf16)', coef: 2.0 },
+    { name: 'QLoRA (4bit)', coef: 0.6 },
+    { name: '全量 (8bit优化器)', coef: 7 },
+    { name: '全量 (fp32 AdamW)', coef: 16 }
+  ];
+  var LOG_MIN = Math.log10(1.5 * 0.6 + 4);
+  var LOG_MAX = Math.log10(70 * 16 + 4);
+
+  function renderHeatmap() {
+    var grid = document.getElementById('hm-grid');
+    grid.textContent = '';
+    var dark = isDark();
+
+    grid.appendChild(el('div', 'hm-corner', '参数量 ↓'));
+    HM_METHODS.forEach(function (m) {
+      var c = el('div', 'hm-col');
+      c.appendChild(el('div', 'm-name', m.name));
+      c.appendChild(el('div', 'm-coef', '× ' + m.coef));
+      grid.appendChild(c);
+    });
+
+    HM_PARAMS.forEach(function (p) {
+      grid.appendChild(el('div', 'hm-row', p + 'B'));
+      HM_METHODS.forEach(function (m) {
+        var v = m.coef * p + 4;
+        var t = (Math.log10(v) - LOG_MIN) / (LOG_MAX - LOG_MIN);
+        var idx = Math.round(t * 12);
+        var hex = dark ? RAMP[12 - idx] : RAMP[idx];
+        var cell = el('div', 'hm-cell tt', fmt(v));
+        cell.style.background = hex;
+        cell.style.color = lum(hex) > 0.5 ? '#0b0b0b' : '#ffffff';
+        cell.tabIndex = 0;
+        cell.dataset.name = p + 'B · ' + m.name;
+        cell.dataset.val = fmt(v) + ' GB';
+        cell.dataset.sub = '≈ ' + m.coef + ' × ' + p + ' + 4';
+        cell.setAttribute('aria-label', p + 'B ' + m.name + ':约 ' + fmt(v) + ' GB');
+        grid.appendChild(cell);
+      });
+    });
+  }
+
+  function renderScaleLegend() {
+    var stops = isDark() ? RAMP.slice().reverse() : RAMP;
+    document.getElementById('scale-bar').style.background =
+      'linear-gradient(90deg,' + stops.join(',') + ')';
+  }
+
+  function renderHeatmapTable() {
+    var tbl = document.getElementById('hm-table-inner');
+    tbl.textContent = '';
+    var thead = el('thead');
+    var hr = el('tr');
+    hr.appendChild(el('th', null, '参数量'));
+    HM_METHODS.forEach(function (m) { hr.appendChild(el('th', 'num', m.name)); });
+    thead.appendChild(hr);
+    tbl.appendChild(thead);
+    var tbody = el('tbody');
+    HM_PARAMS.forEach(function (p) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, p + 'B'));
+      HM_METHODS.forEach(function (m) {
+        tr.appendChild(el('td', 'num', fmt(m.coef * p + 4) + ' GB'));
+      });
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+  }
+
+  /* ---------- 计算器 ---------- */
+  var METHODS = {
+    lora:   { label: 'LoRA(bf16底座)',       w: 2,   stateCoef: 0.013 * 6, coef: 2.0 },
+    qlora:  { label: 'QLoRA(4bit底座)',      w: 0.5, stateCoef: 0.013 * 6, coef: 0.6 },
+    full8:  { label: '全量微调(8bit优化器)', w: 2,   stateCoef: 4,         coef: 7 },
+    full32: { label: '全量微调(fp32 AdamW)', w: 2,   stateCoef: 14,        coef: 16 }
+  };
+  var calcState = { P: 3.75, method: 'lora', act: 3, gpu: 24 };
+
+  function positionGpuLine() {
+    var wrap = document.querySelector('#calc .bar-wrap');
+    var line = document.getElementById('gpu-line');
+    var zone = document.getElementById('oom-zone');
+    if (!wrap || !line || line.style.display === 'none') return;
+    var w = wrap.clientWidth;
+    var scale = calcScale;
+    var x = calcState.gpu / scale * (w - 6);
+    line.style.left = x + 'px';
+    zone.style.left = x + 'px';
+  }
+
+  var calcScale = 1;
+
+  function renderCalc() {
+    var m = METHODS[calcState.method];
+    var weight = calcState.P * m.w;
+    var ts = calcState.P * m.stateCoef;
+    var act = calcState.act;
+    var cuda = 1;
+    var total = weight + ts + act + cuda;
+    var quick = calcState.P * m.coef + 4;
+    var gpu = calcState.gpu;
+
+    document.getElementById('hero-num').textContent = '≈ ' + fmt(total);
+
+    var ratio = total / gpu;
+    var verdict = document.getElementById('verdict');
+    var vIcon = document.getElementById('v-icon');
+    var vTitle = document.getElementById('v-title');
+    var vDesc = document.getElementById('v-desc');
+    var pctText = Math.round(ratio * 100) + '%';
+    if (ratio <= 0.7) {
+      verdict.className = 'verdict v-good';
+      vIcon.textContent = '✓';
+      vTitle.textContent = '显存充足';
+      vDesc.textContent = '占 GPU 显存 ' + pctText + ',余量可用来加大 batch。';
+    } else if (ratio <= 0.9) {
+      verdict.className = 'verdict v-warn';
+      vIcon.textContent = '⚠';
+      vTitle.textContent = '贴边运行';
+      vDesc.textContent = '占 GPU 显存 ' + pctText + ',能跑但没余量,建议降 batch 或换更大显存。';
+    } else {
+      verdict.className = 'verdict v-crit';
+      vIcon.textContent = '✕';
+      vTitle.textContent = '会 OOM';
+      vDesc.textContent = '需 GPU 显存的 ' + pctText + ',降低参数量 / 换训练方式 / 换卡。';
+    }
+
+    calcScale = Math.max(total, gpu) * 1.06;
+    var items = [
+      { name: '模型权重', val: weight, slot: 1 },
+      { name: '训练状态', val: ts, slot: 2 },
+      { name: '激活值', val: act, slot: 3 },
+      { name: 'CUDA 开销', val: cuda, slot: 4 }
+    ];
+    buildSegbar(document.getElementById('calc-bar'), document.getElementById('calc-legend'), items, calcScale);
+
+    var line = document.getElementById('gpu-line');
+    var zone = document.getElementById('oom-zone');
+    line.style.display = '';
+    zone.style.display = '';
+    document.getElementById('gpu-line-label').textContent = 'GPU ' + gpu + ' GB';
+    positionGpuLine();
+
+    var tbody = document.getElementById('calc-tbody');
+    tbody.textContent = '';
+    items.forEach(function (it) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, it.name));
+      tr.appendChild(el('td', 'num', fmt(it.val) + ' GB'));
+      tr.appendChild(el('td', 'num', Math.round(it.val / total * 100) + '%'));
+      tbody.appendChild(tr);
+    });
+    var trT = el('tr');
+    trT.appendChild(el('td', 'total', '合计'));
+    trT.appendChild(el('td', 'num total', '≈ ' + fmt(total) + ' GB'));
+    trT.appendChild(el('td', 'num', '100%'));
+    tbody.appendChild(trT);
+
+    document.getElementById('quick-check').innerHTML = '';
+    var qc = document.getElementById('quick-check');
+    qc.appendChild(document.createTextNode('快速公式交叉验证(偏保守):'));
+    var code = el('code', null, fmt(calcState.P) + ' × ' + m.coef + ' + 4 ≈ ' + fmt(quick) + ' GB');
+    qc.appendChild(code);
+  }
+
+  document.getElementById('p-slider').addEventListener('input', function () {
+    calcState.P = parseFloat(this.value);
+    document.getElementById('p-out').textContent = calcState.P + ' B';
+    renderCalc();
+  });
+  document.getElementById('method-pills').addEventListener('change', function (e) {
+    if (e.target.name === 'method') { calcState.method = e.target.value; renderCalc(); }
+  });
+  document.getElementById('act-pills').addEventListener('change', function (e) {
+    if (e.target.name === 'act') { calcState.act = parseFloat(e.target.value); renderCalc(); }
+  });
+  document.getElementById('gpu-select').addEventListener('change', function () {
+    calcState.gpu = parseFloat(this.value);
+    renderCalc();
+  });
+
+  /* ---------- 数据表开关 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('.tgl-btn'), function (btn) {
+    btn.addEventListener('click', function () {
+      var target = document.getElementById(btn.dataset.target);
+      var open = target.classList.toggle('open');
+      btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+      btn.textContent = open ? '收起数据表' : '查看数据表';
+    });
+  });
+
+  /* ---------- Tooltip ---------- */
+  var tip = document.getElementById('tooltip');
+  var ttKey = document.getElementById('tt-key');
+  var ttName = document.getElementById('tt-name');
+  var ttVal = document.getElementById('tt-val');
+  var ttSub = document.getElementById('tt-sub');
+  var currentMark = null;
+
+  function fillTip(mark) {
+    ttName.textContent = mark.dataset.name || '';
+    ttVal.textContent = mark.dataset.val || '';
+    ttSub.textContent = mark.dataset.sub || '';
+    ttSub.style.display = mark.dataset.sub ? '' : 'none';
+    ttKey.style.background = getComputedStyle(mark).backgroundColor;
+  }
+  function placeTip(x, y) {
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    var px = x + 14, py = y + 14;
+    if (px + tw > window.innerWidth - 8) px = x - tw - 14;
+    if (py + th > window.innerHeight - 8) py = y - th - 14;
+    tip.style.left = px + 'px';
+    tip.style.top = py + 'px';
+  }
+  function showTip(mark, x, y) {
+    currentMark = mark;
+    fillTip(mark);
+    tip.style.display = 'block';
+    placeTip(x, y);
+  }
+  function hideTip() {
+    currentMark = null;
+    tip.style.display = 'none';
+  }
+  document.addEventListener('pointerover', function (e) {
+    var mark = e.target.closest && e.target.closest('.tt');
+    if (mark && mark !== currentMark) showTip(mark, e.clientX, e.clientY);
+  });
+  document.addEventListener('pointermove', function (e) {
+    if (currentMark) placeTip(e.clientX, e.clientY);
+  });
+  document.addEventListener('pointerout', function (e) {
+    var mark = e.target.closest && e.target.closest('.tt');
+    if (mark && !mark.contains(e.relatedTarget)) hideTip();
+  });
+  document.addEventListener('focusin', function (e) {
+    var mark = e.target.closest && e.target.closest('.tt');
+    if (mark) {
+      var r = mark.getBoundingClientRect();
+      showTip(mark, r.left + r.width / 2, r.top);
+    }
+  });
+  document.addEventListener('focusout', function (e) {
+    var mark = e.target.closest && e.target.closest('.tt');
+    if (mark) hideTip();
+  });
+
+  /* ---------- 启动 ---------- */
+  function renderThemeDependent() {
+    renderHeatmap();
+    renderScaleLegend();
+  }
+  themeLabel();
+  renderThemeDependent();
+  renderHeatmapTable();
+  renderCalc();
+})();
+</script>
+</body>
+</html>

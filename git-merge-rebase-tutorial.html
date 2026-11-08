@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git Merge vs Rebase 交互教程</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #171e2e;
+    --panel2: #1d2639;
+    --text: #e6ebf4;
+    --muted: #8a94a8;
+    --accent: #4f8ef7;
+    --green: #3ecf8e;
+    --orange: #f59e42;
+    --red: #f4656a;
+    --purple: #a97ef5;
+    --line: #2a3450;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  h1 .sub { display:block; font-size: 14px; color: var(--muted); font-weight: normal; margin-top: 6px;}
+  h2 { font-size: 20px; margin: 40px 0 12px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  h3 { font-size: 16px; margin: 20px 0 8px; color: var(--green); }
+  p { margin: 8px 0; color: #c6cfdd; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 14px 0;
+  }
+  .motto {
+    background: linear-gradient(135deg, #1a2a4a, #16243c);
+    border: 1px solid #2f4d80;
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-size: 17px;
+    text-align: center;
+    letter-spacing: 1px;
+    margin: 20px 0;
+  }
+  code {
+    font-family: Consolas, "Courier New", monospace;
+    background: #0b0f18;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 13px;
+    color: #9fd0ff;
+  }
+  .terminal {
+    background: #0a0e16;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+    margin: 10px 0;
+    min-height: 42px;
+  }
+  .terminal .prompt { color: var(--green); }
+  .terminal .cmd { color: #e6ebf4; }
+  .logmsg {
+    background: #241a10;
+    border: 1px dashed var(--orange);
+    color: var(--orange);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+    margin: 10px 0;
+    display: none;
+  }
+  .logmsg.show { display: block; animation: pop .4s ease; }
+  @keyframes pop { from { transform: scale(.95); opacity: 0;} to { transform: scale(1); opacity: 1;} }
+
+  /* 动画区 */
+  .anim {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 14px 0;
+  }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tab {
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .2s;
+  }
+  .tab.active { color: #fff; border-color: var(--accent); background: #203357; }
+  .caption {
+    min-height: 44px;
+    font-size: 14px;
+    color: #c6cfdd;
+    margin: 8px 0;
+  }
+  .caption b { color: var(--accent); }
+  .caption .hl-orange { color: var(--orange); font-weight: bold; }
+  .caption .hl-green { color: var(--green); font-weight: bold; }
+  .caption .hl-red { color: var(--red); font-weight: bold; }
+  svg { width: 100%; height: auto; display: block; }
+  .ctrl { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  button.op {
+    background: #203357;
+    color: #fff;
+    border: 1px solid #33518a;
+    border-radius: 8px;
+    padding: 7px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .15s;
+  }
+  button.op:hover { background: #2a4470; }
+  button.op:disabled { opacity: .35; cursor: not-allowed; }
+  .stepnum { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
+  th { background: var(--panel2); color: #fff; }
+  td { color: #c6cfdd; }
+  .good { color: var(--green); }
+  .bad { color: var(--red); }
+
+  ul, ol { margin: 8px 0 8px 22px; color: #c6cfdd; }
+  li { margin: 5px 0; }
+  .tip {
+    border-left: 4px solid var(--orange);
+    background: #1f1a12;
+    padding: 10px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .legend { display:flex; gap:18px; font-size:12px; color:var(--muted); margin-top:6px; flex-wrap:wrap;}
+  .legend span::before { content:"● "; }
+  .lg-main::before { color: var(--accent) !important; }
+  .lg-dev::before { color: var(--green) !important; }
+  .lg-remote::before { color: var(--purple) !important; }
+  .lg-ghost::before { color: #555f73 !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Git Merge vs Rebase
+  <span class="sub">交互式动画教程 —— 一图看懂两条历史线，以及那句神秘的 "Merge branch 'main' of https://xxx.git into main"</span>
+</h1>
+
+<div class="motto">口诀：<b style="color:var(--accent)">merge 打结不搬家，rebase 搬家不打结；pull 遇分叉自动打结，结上写着那句英文话。</b></div>
+
+<h2>一、核心模型 / 直觉</h2>
+<div class="card">
+  <p>把提交历史想象成一条<b>时间线地图</b>：每个提交是一个站点，分支是两条岔路。</p>
+  <h3>git merge —— "修一条汇合路"</h3>
+  <p>两条岔路<b>原封不动</b>，只是新建一个<b>汇合站（合并提交）</b>，它有<b>两个父节点</b>，把两条路重新连成一体。历史长什么样就保留什么样——一张"铁路图"。</p>
+  <h3>git rebase —— "把我的路拆了，搬到你的路尽头重铺"</h3>
+  <p>把我分支上的提交<b>一个个摘下来</b>，复制一份<b>接到目标分支的最新提交后面</b>。原提交被抛弃（内容一样但哈希变了），历史变成一条<b>直线</b>。</p>
+  <div class="tip">一句话：<b>merge 保留"分叉过"的事实，rebase 伪造"从来没分叉"的历史。</b></div>
+</div>
+
+<h2>二、交互动画：亲眼看到区别</h2>
+<p>下面三个场景共用同一套操作：点 <b>下一步</b> 逐步执行，观察提交图的每一步变化。</p>
+
+<div class="anim">
+  <div class="tabs">
+    <div class="tab active" data-s="0">场景1：git merge</div>
+    <div class="tab" data-s="1">场景2：git rebase</div>
+    <div class="tab" data-s="2">场景3：神秘语句的诞生（git pull）</div>
+  </div>
+  <div class="terminal" id="term"><span class="prompt">$ </span><span class="cmd">git checkout -b dev　（按"下一步"开始）</span></div>
+  <div class="logmsg" id="logmsg"></div>
+  <div class="caption" id="caption"></div>
+  <svg id="graph" viewBox="0 0 640 210"></svg>
+  <div class="legend">
+    <span class="lg-main">main</span>
+    <span class="lg-dev">feature/dev</span>
+    <span class="lg-remote">远程 (origin)</span>
+    <span class="lg-ghost">被抛弃的旧提交</span>
+  </div>
+  <div class="ctrl">
+    <button class="op" id="btnPrev">← 上一步</button>
+    <button class="op" id="btnNext">下一步 →</button>
+    <button class="op" id="btnPlay">▶ 播放</button>
+    <button class="op" id="btnReset">↺ 重置</button>
+    <span class="stepnum" id="stepnum"></span>
+  </div>
+</div>
+
+<h2>三、公式与边界的推导：为什么 pull 会"自作主张"打结？</h2>
+<div class="card">
+  <p><code>git pull</code> 的本质是一个<b>复合命令</b>：</p>
+  <div class="terminal">$ git pull&nbsp;&nbsp;≡&nbsp;&nbsp;$ git fetch&nbsp;&nbsp;+&nbsp;&nbsp;$ git merge origin/main（或 rebase，见下）</div>
+  <p>所以 <span class="hl-orange">"Merge branch 'main' of https://xxx.git into main"</span> 出现的<b>充要条件</b>可以现场推导出来：</p>
+  <ol>
+    <li><b>fetch 阶段</b>：把远程仓库（URL = 那个 https://xxx.git）的 main 新提交下载到本地，记为 <code>origin/main</code>。消息里的 <code>'main' of https://xxx.git</code> 就是这么来的——<b>被合并的一方是"远程的 main"</b>。</li>
+    <li><b>merge 阶段</b>：Git 把 <code>origin/main</code> 合并进你当前的 <code>main</code>。此时只有两种可能：
+      <ul>
+        <li>你本地<b>没有新提交</b>（只是落后于远程）→ 直接<b>快进（fast-forward）</b>，指针往前挪，<span class="hl-green">不产生合并提交</span>；</li>
+        <li>你本地<b>也有新提交</b>（双方分叉）→ 只能真合并，<span class="hl-red">产生一个合并提交</span>，默认消息就是那句话。</li>
+      </ul>
+    </li>
+  </ol>
+  <p>所以判定公式：</p>
+  <div class="motto" style="margin:12px 0">本地有未 push 的提交 <b>且</b> 远程也有别人的新提交，此时 <code>git pull</code> → 那句话必然出现在 log 里。</div>
+  <h3>怎么让它永远不出现？</h3>
+  <ul>
+    <li>临时：<code>git pull --rebase</code> —— fetch 后改用 rebase，把你的本地提交"搬到"远程提交后面，历史保持直线。</li>
+    <li>永久：<code>git config --global pull.rebase true</code> —— 以后所有 pull 默认走 rebase。</li>
+    <li>手动拆开：先 <code>git fetch</code> 看一眼，再自己决定 merge 还是 rebase。</li>
+  </ul>
+  <div class="tip">场景3 动画的最后几步演示了这三种情况，请务必走完。</div>
+</div>
+
+<h2>四、对比总结</h2>
+<table>
+  <tr><th></th><th>git merge</th><th>git rebase</th></tr>
+  <tr><td>历史形状</td><td>铁路图（保留分叉）</td><td>一条直线（消除分叉）</td></tr>
+  <tr><td>是否产生新提交</td><td>是（合并提交，2 个父节点）</td><td>是（每个原提交的"复制版"，哈希全变）</td></tr>
+  <tr><td>原提交是否保留</td><td class="good">保留</td><td class="bad">被抛弃（变成不可达）</td></tr>
+  <tr><td>冲突处理</td><td>一次性解决所有冲突</td><td>可能每个提交都要解一次</td></tr>
+  <tr><td>是否改写历史</td><td class="good">否，对已 push 的提交安全</td><td class="bad">是，<b>严禁 rebase 别人可能已拉取的共享分支</b></td></tr>
+  <tr><td>典型用途</td><td>把功能分支合回 main；合成 PR</td><td>把 main 的最新进展"吸进"自己的私有功能分支；pull 时保持直线</td></tr>
+</table>
+
+<h2>五、口诀</h2>
+<div class="motto">
+  merge 是"修桥"，rebase 是"搬家"；<br>
+  pull = fetch + 合并，本地远程都动了它就打结；<br>
+  结上那句英文话 = "把<b>远程的 main</b> 合进<b>我本地的 main</b>"；<br>
+  <code>pull --rebase</code> 一配，从此只见直线不见结。
+</div>
+
+<h2>六、从零复现的步骤清单</h2>
+<div class="card">
+  <ol>
+    <li><b>画两条线</b>：main 和 dev 从同一点分叉，各自有新提交 → 为什么？分叉是讨论 merge/rebase 的前提。</li>
+    <li><b>merge 路线</b>：<code>git checkout main && git merge dev</code> → 为什么？产生双父节点的合并提交，两条线都原样保留。</li>
+    <li><b>rebase 路线</b>：<code>git checkout dev && git rebase main</code> → 为什么？把 dev 的提交复制到 main 最新提交之后，旧提交变幽灵，哈希全变。</li>
+    <li><b>收尾</b>：rebase 后回 main 执行 <code>git merge dev</code> → 为什么？此时是快进，只挪指针，历史仍是直线。</li>
+    <li><b>解释神秘语句</b>：本地有未 push 提交 + 远程有新提交 + 执行 <code>git pull</code> → 为什么？pull = fetch + merge，fetch 下来的 origin/main 与本地 main 分叉，merge 自动执行，默认消息就是 <code>Merge branch 'main' of &lt;URL&gt; into main</code>。</li>
+    <li><b>根治</b>：<code>git config --global pull.rebase true</code> → 为什么？让 pull 的第二阶段从 merge 换成 rebase，分叉被"搬家"消除，不再打结。</li>
+    <li><b>红线自查</b>：要 rebase 的分支是否已被别人 pull 过？→ 为什么？rebase 改写历史，共享分支被改写会让协作者的历史对不上。</li>
+  </ol>
+</div>
+
+<p style="color:var(--muted);font-size:12px;margin-top:40px;text-align:center">Git Merge / Rebase 交互教程 · 单文件 HTML，双击即开</p>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------- 通用绘制 ---------- */
+var svg = document.getElementById("graph");
+var NS = "http://www.w3.org/2000/svg";
+function el(name, attrs, text){
+  var e = document.createElementNS(NS, name);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function render(frame){
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  // 边
+  (frame.edges || []).forEach(function(ed){
+    var a = findC(ed[0]), b = findC(ed[1]);
+    if (!a || !b) return;
+    var midX = (a.x + b.x) / 2;
+    svg.appendChild(el("path", {
+      d: "M"+a.x+","+a.y+" C"+midX+","+a.y+" "+midX+","+b.y+" "+b.x+","+b.y,
+      stroke: a.color || "#55617f", fill: "none", "stroke-width": 2.5,
+      "stroke-dasharray": a.ghost || b.ghost ? "5 4" : "none", opacity: .8
+    }));
+  });
+  function findC(id){
+    for (var i=0;i<frame.commits.length;i++) if (frame.commits[i].id===id) return frame.commits[i];
+    return null;
+  }
+  // 提交
+  frame.commits.forEach(function(c){
+    var g = el("g", {class:"commit"});
+    if (c.flash) {
+      var halo = el("circle", {cx:c.x, cy:c.y, r:16, fill:"none", stroke:c.color||"#4f8ef7", "stroke-width":2, opacity:.9});
+      var anim = el("animate", {attributeName:"r", from:10, to:22, dur:"0.6s", repeatCount:"indefinite"});
+      var anim2 = el("animate", {attributeName:"opacity", from:.9, to:0, dur:"0.6s", repeatCount:"indefinite"});
+      halo.appendChild(anim); halo.appendChild(anim2);
+      g.appendChild(halo);
+    }
+    g.appendChild(el("circle", {
+      cx: c.x, cy: c.y, r: c.ghost ? 8 : 11,
+      fill: c.ghost ? "none" : (c.color || "#55617f"),
+      stroke: c.ghost ? "#5a6478" : "#0f1420",
+      "stroke-width": c.ghost ? 2 : 2.5,
+      "stroke-dasharray": c.ghost ? "4 3" : "none",
+      opacity: c.ghost ? .55 : 1
+    }));
+    g.appendChild(el("text", {
+      x: c.x, y: c.y + 4, "text-anchor":"middle", "dominant-baseline":"middle",
+      fill: c.ghost ? "#8a94a8" : "#0f1420",
+      "font-size": 9, "font-family":"Consolas, monospace",
+      "font-weight": "bold"
+    }, c.id));
+    svg.appendChild(g);
+  });
+  // 分支指针
+  (frame.refs || []).forEach(function(r){
+    var w = r.name.length * 7.2 + 16;
+    var x = r.x - w/2;
+    svg.appendChild(el("rect", {x:x, y:r.y-34, width:w, height:20, rx:10,
+      fill: r.color || "#4f8ef7", opacity:.92}));
+    svg.appendChild(el("polygon", {points:(r.x-5)+","+(r.y-14)+" "+(r.x+5)+","+(r.y-14)+" "+r.x+","+(r.y-7),
+      fill: r.color || "#4f8ef7", opacity:.92}));
+    svg.appendChild(el("text", {x:r.x, y:r.y-20, "text-anchor":"middle",
+      fill:"#fff", "font-size":11, "font-weight":"bold", "font-family":"Consolas, monospace"}, r.name));
+  });
+}
+
+/* ---------- 场景数据 ---------- */
+var C_MAIN = "#4f8ef7", C_DEV = "#3ecf8e", C_REM = "#a97ef5";
+
+// 场景 1 & 2 共用的前三步
+function commonSteps(){
+  return [
+    { term: "git checkout -b dev",
+      caption: "从 main 的 C2 处<b>开辟岔路</b>：新建 dev 分支，此刻两分支指向同一个提交。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN, flash:true}
+      ],
+      edges: [["C1","C2"]],
+      refs: [{name:"main", x:190, y:70, color:C_MAIN}, {name:"dev", x:190, y:70, color:C_DEV}] },
+    { term: "git commit -m \"功能A\" ×2 （在 dev 上）",
+      caption: "dev 上前进两步：C3、C4。main 停在原地。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C3", x:310, y:140, color:C_DEV},
+        {id:"C4", x:430, y:140, color:C_DEV}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C3","C4"]],
+      refs: [{name:"main", x:190, y:70, color:C_MAIN}, {name:"dev", x:430, y:140, color:C_DEV}] },
+    { term: "git checkout main && git commit -m \"修复B\"",
+      caption: "切回 main 又前进一步：C5。此时<b>两条岔路各自领先对方一个提交</b>——分叉形成了。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C3", x:310, y:140, color:C_DEV},
+        {id:"C4", x:430, y:140, color:C_DEV},
+        {id:"C5", x:310, y:70, color:C_MAIN}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C3","C4"],["C2","C5"]],
+      refs: [{name:"main", x:310, y:70, color:C_MAIN}, {name:"dev", x:430, y:140, color:C_DEV}] }
+  ];
+}
+
+var scenarios = [
+/* -------- 场景1: merge -------- */
+{ steps: commonSteps().concat([
+    { term: "git checkout main && git merge dev",
+      caption: "merge 执行：<b>两条线都原封不动</b>，只新建一个<b>双父节点</b>的合并提交 M（同时连接 C4 和 C5）。历史成了一张铁路图。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C3", x:310, y:140, color:C_DEV},
+        {id:"C4", x:430, y:140, color:C_DEV},
+        {id:"C5", x:310, y:70, color:C_MAIN},
+        {id:"M",  x:520, y:105, color:"#f4d35e", flash:true, newC:true}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C3","C4"],["C2","C5"],["C4","M"],["C5","M"]],
+      refs: [{name:"dev", x:430, y:140, color:C_DEV}, {name:"main", x:520, y:105, color:C_MAIN}] },
+    { term: "git log --oneline --graph",
+      caption: "<b>merge 的本质：</b>不搬家、不改历史，只打一个结。C3/C4/C5 的哈希永远不变——这就是它对已 push 的提交安全的原因。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C3", x:310, y:140, color:C_DEV},
+        {id:"C4", x:430, y:140, color:C_DEV},
+        {id:"C5", x:310, y:70, color:C_MAIN},
+        {id:"M",  x:520, y:105, color:"#f4d35e"}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C3","C4"],["C2","C5"],["C4","M"],["C5","M"]],
+      refs: [{name:"dev", x:430, y:140, color:C_DEV}, {name:"main", x:520, y:105, color:C_MAIN}] }
+])},
+
+/* -------- 场景2: rebase -------- */
+{ steps: commonSteps().concat([
+    { term: "git checkout dev && git rebase main",
+      caption: "rebase 执行：C3、C4 被<b>摘下来</b>（虚线幽灵），复制成 C3'、C4' 接到 C5 后面。<b>注意：新提交哈希全变了</b>，虽然内容一样。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C3", x:310, y:140, color:C_DEV, ghost:true},
+        {id:"C4", x:430, y:140, color:C_DEV, ghost:true},
+        {id:"C5", x:310, y:70, color:C_MAIN},
+        {id:"C3'", x:430, y:70, color:C_DEV, flash:true, newC:true},
+        {id:"C4'", x:550, y:70, color:C_DEV, flash:true, newC:true}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C3","C4"],["C2","C5"],["C5","C3'"],["C3'","C4'"]],
+      refs: [{name:"main", x:310, y:70, color:C_MAIN}, {name:"dev", x:550, y:70, color:C_DEV}] },
+    { term: "git checkout main && git merge dev　（快进！）",
+      caption: "回到 main 再 merge dev——因为 main 是 dev 的祖先，Git 直接<b>快进（fast-forward）</b>：只挪指针，不产生任何新提交。历史是一条直线。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C5", x:310, y:70, color:C_MAIN},
+        {id:"C3'", x:430, y:70, color:C_DEV},
+        {id:"C4'", x:550, y:70, color:C_DEV},
+        {id:"C3", x:310, y:150, color:"#55617f", ghost:true},
+        {id:"C4", x:430, y:150, color:"#55617f", ghost:true}
+      ],
+      edges: [["C1","C2"],["C2","C5"],["C5","C3'"],["C3'","C4'"]],
+      refs: [{name:"dev", x:550, y:70, color:C_DEV}, {name:"main", x:550, y:70, color:C_MAIN}] },
+    { term: "git log --oneline --graph",
+      caption: "<b>rebase 的本质：</b>搬家重放，伪造\"从来没分叉过\"的直线历史。代价是哈希改变——所以<b>不能对别人已拉取的共享分支做 rebase</b>。",
+      commits: [
+        {id:"C1", x:70,  y:70, color:C_MAIN},
+        {id:"C2", x:190, y:70, color:C_MAIN},
+        {id:"C5", x:310, y:70, color:C_MAIN},
+        {id:"C3'", x:430, y:70, color:C_DEV},
+        {id:"C4'", x:550, y:70, color:C_DEV}
+      ],
+      edges: [["C1","C2"],["C2","C5"],["C5","C3'"],["C3'","C4'"]],
+      refs: [{name:"main", x:550, y:70, color:C_MAIN, color2:C_DEV}] }
+])},
+
+/* -------- 场景3: git pull -------- */
+{ steps: [
+    { term: "git commit -m \"我的C3\"　（本地 main，还没 push）",
+      caption: "你在本地 main 上提交了 C3，<b>还没 push</b>。",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C3", x:320, y:80, color:C_MAIN}
+      ],
+      edges: [["C1","C2"],["C2","C3"]],
+      refs: [{name:"main", x:320, y:80, color:C_MAIN}, {name:"origin/main", x:200, y:80, color:C_REM}] },
+    { term: "（同一时间，同事 push 了 C4 到远程 main）",
+      caption: "同事抢先往远程 main 推了 C4（基于 C2）。此时<b>本地 main 与 origin/main 分叉了</b>——你俩从 C2 各自往前走。",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C3", x:320, y:80, color:C_MAIN},
+        {id:"C4", x:320, y:150, color:C_REM, flash:true}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C2","C4"]],
+      refs: [{name:"main", x:320, y:80, color:C_MAIN}, {name:"origin/main*", x:320, y:150, color:C_REM}] },
+    { term: "git pull　（第一阶段：fetch）",
+      caption: "执行 <b>git pull = git fetch + git merge origin/main</b>。fetch 把 C4 下载到本地，origin/main 指针更新。注意：<b>你的 main 还没动</b>。",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C3", x:320, y:80, color:C_MAIN},
+        {id:"C4", x:320, y:150, color:C_REM}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C2","C4"]],
+      refs: [{name:"main", x:320, y:80, color:C_MAIN}, {name:"origin/main", x:320, y:150, color:C_REM}] },
+    { term: "git pull　（第二阶段：merge，因为分叉了）",
+      caption: "第二阶段：Git 发现本地 main 和 origin/main <span class='hl-red'>分叉了</span>，无法快进 → 只能真合并，自动生成合并提交 M。动画后看下方橙框——<b>那句神秘的话出现了！</b>",
+      logmsg: "Merge branch 'main' of https://xxx.git into main",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C3", x:320, y:80, color:C_MAIN},
+        {id:"C4", x:320, y:150, color:C_REM},
+        {id:"M",  x:450, y:115, color:"#f4d35e", flash:true, newC:true}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C2","C4"],["C3","M"],["C4","M"]],
+      refs: [{name:"origin/main", x:320, y:150, color:C_REM}, {name:"main", x:450, y:115, color:C_MAIN}] },
+    { term: "解读这条合并消息",
+      caption: "<span class='hl-orange'>Merge branch 'main' of https://xxx.git into main</span> 翻译过来：<b>\"把（https://xxx.git 这个远程仓库的）main，合进（我本地的）main\"</b>。它<b>只会</b>在 pull 且本地有未 push 提交时出现——这是 Git 自动替你执行的 merge，不是你手动敲的。",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C3", x:320, y:80, color:C_MAIN},
+        {id:"C4", x:320, y:150, color:C_REM},
+        {id:"M",  x:450, y:115, color:"#f4d35e"}
+      ],
+      edges: [["C1","C2"],["C2","C3"],["C2","C4"],["C3","M"],["C4","M"]],
+      refs: [{name:"origin/main", x:320, y:150, color:C_REM}, {name:"main", x:450, y:115, color:C_MAIN}] },
+    { term: "git pull --rebase　（换成 rebase 就不打结）",
+      caption: "<b>替代方案：</b><span class='hl-green'>git pull --rebase</span> —— fetch 后改用 rebase，把你的 C3 搬家成 C3' 接到远程 C4 后面。没有合并提交，历史是直线，那句话永远不会出现。",
+      commits: [
+        {id:"C1", x:80,  y:70, color:C_MAIN},
+        {id:"C2", x:200, y:70, color:C_MAIN},
+        {id:"C4", x:320, y:70, color:C_REM},
+        {id:"C3'", x:440, y:70, color:C_MAIN, flash:true, newC:true}
+      ],
+      edges: [["C1","C2"],["C2","C4"],["C4","C3'"]],
+      refs: [{name:"origin/main", x:320, y:70, color:C_REM}, {name:"main", x:440, y:70, color:C_MAIN}] },
+    { term: "反例：本地没有新提交时",
+      caption: "<b>反例：</b>如果你本地<b>没有</b>未 push 的提交（只有 C1、C2），pull 时 Git 直接<b>快进</b>——main 指针滑到 C4，<span class='hl-green'>不产生合并提交，那句话不会出现</span>。",
+      commits: [
+        {id:"C1", x:80,  y:80, color:C_MAIN},
+        {id:"C2", x:200, y:80, color:C_MAIN},
+        {id:"C4", x:320, y:80, color:C_REM, flash:true}
+      ],
+      edges: [["C1","C2"],["C2","C4"]],
+      refs: [{name:"origin/main", x:320, y:80, color:C_REM}, {name:"main", x:320, y:80, color:C_MAIN}] }
+]}
+];
+
+/* ---------- 控制器 ---------- */
+var tabEls = document.querySelectorAll(".tab");
+var termEl = document.getElementById("term");
+var capEl = document.getElementById("caption");
+var logEl = document.getElementById("logmsg");
+var btnPrev = document.getElementById("btnPrev");
+var btnNext = document.getElementById("btnNext");
+var btnPlay = document.getElementById("btnPlay");
+var btnReset = document.getElementById("btnReset");
+var stepNum = document.getElementById("stepnum");
+
+var cur = 0, idx = 0, timer = null;
+
+function show(){
+  var sc = scenarios[cur];
+  var f = sc.steps[idx];
+  render(f);
+  termEl.innerHTML = "<span class='prompt'>$ </span><span class='cmd'>" + f.term + "</span>";
+  capEl.innerHTML = f.caption || "";
+  if (f.logmsg) { logEl.textContent = "git log 显示：" + f.logmsg; logEl.classList.add("show"); }
+  else logEl.classList.remove("show");
+  stepNum.textContent = (idx+1) + " / " + sc.steps.length;
+  btnPrev.disabled = idx === 0;
+  btnNext.disabled = idx === sc.steps.length - 1;
+  btnPlay.textContent = timer ? "⏸ 暂停" : "▶ 播放";
+}
+function stopPlay(){ if (timer){ clearInterval(timer); timer = null; } show(); }
+
+btnPrev.onclick = function(){ stopPlay(); if (idx>0){ idx--; show(); } };
+btnNext.onclick = function(){ stopPlay(); if (idx < scenarios[cur].steps.length-1){ idx++; show(); } };
+btnReset.onclick = function(){ stopPlay(); idx = 0; show(); };
+btnPlay.onclick = function(){
+  if (timer){ stopPlay(); return; }
+  if (idx >= scenarios[cur].steps.length-1) idx = 0;
+  timer = setInterval(function(){
+    if (idx < scenarios[cur].steps.length-1){ idx++; show(); }
+    else stopPlay();
+  }, 2200);
+  show();
+};
+tabEls.forEach(function(t){
+  t.onclick = function(){
+    stopPlay();
+    tabEls.forEach(function(x){ x.classList.remove("active"); });
+    t.classList.add("active");
+    cur = +t.dataset.s; idx = 0; show();
+  };
+});
+
+show();
+})();
+</script>
+</body>
+</html>

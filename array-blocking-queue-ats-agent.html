@@ -1,0 +1,395 @@
+<div id="abq-explainer">
+    <h2>ArrayBlockingQueue 在 ats-agent 里：单槽最新态通知</h2>
+    <p class="abq-mut abq-sub">对应代码：ConfigSlot.java（槽）· ConfigPollLoop.java（循环一）· RotationLoop.java（循环二）　|　角色色：<span class="abq-lg"><i class="abq-lgdot" style="background:#2563eb"></i>循环一</span> <span class="abq-lg"><i class="abq-lgdot" style="background:#16a34a"></i>循环二</span> <span class="abq-lg"><i class="abq-lgdot" style="background:#d97706"></i>槽</span></p>
+
+    <section class="abq-sec" style="--acc:#2563eb;--accbg:#eff6ff;--accbd:#bfdbfe">
+        <div class="abq-sec-head"><span class="abq-badge">1</span><span>它有什么特点</span></div>
+        <div class="abq-sec-body">
+            <div class="abq-traits">
+                <div class="abq-trait" style="--tacc:#2563eb;--tbg:#eff6ff;--tbd:#bfdbfe"><i data-lucide="box" aria-hidden="true"></i><div><strong>有界</strong><div class="abq-mut abq-small">容量构造时定死：<code>new ArrayBlockingQueue&lt;&gt;(1)</code>，最多攒 1 条，永不堆积</div></div></div>
+                <div class="abq-trait" style="--tacc:#16a34a;--tbg:#f0fdf4;--tbd:#bbf7d0"><i data-lucide="list-ordered" aria-hidden="true"></i><div><strong>FIFO 数组结构</strong><div class="abq-mut abq-small">环形数组 + 取/放两个下标，先进先出</div></div></div>
+                <div class="abq-trait" style="--tacc:#d97706;--tbg:#fffbeb;--tbd:#fde68a"><i data-lucide="lock" aria-hidden="true"></i><div><strong>一把锁、两个条件</strong><div class="abq-mut abq-small">ReentrantLock + notEmpty / notFull 两个等待条件</div></div></div>
+                <div class="abq-trait" style="--tacc:#7c3aed;--tbg:#f5f3ff;--tbd:#ddd6fe"><i data-lucide="moon" aria-hidden="true"></i><div><strong>阻塞语义</strong><div class="abq-mut abq-small">取空 → 线程挂起让出 CPU；放入/取走时唤醒对面等待者</div></div></div>
+                <div class="abq-trait" style="--tacc:#dc2626;--tbg:#fef2f2;--tbd:#fecaca"><i data-lucide="ban" aria-hidden="true"></i><div><strong>不收 null</strong><div class="abq-mut abq-small">null 保留给 poll 超时"没取到"的返回值</div></div></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="abq-sec" style="--acc:#d97706;--accbg:#fffbeb;--accbd:#fde68a">
+        <div class="abq-sec-head"><span class="abq-badge">2</span><span>它在做什么：循环一 → 循环二 的接力棒</span></div>
+        <div class="abq-sec-body">
+            <div class="abq-flow">
+                <div class="abq-node abq-n1">循环一<div class="abq-small abq-mut">每 5s 拉配置</div></div>
+                <span class="abq-arrow">键变化 →</span>
+                <div class="abq-node">写 cache.json<div class="abq-small abq-mut">先盘后投</div></div>
+                <span class="abq-arrow">offer →</span>
+                <div class="abq-node abq-nq">槽（容量 1）</div>
+                <span class="abq-arrow">poll(remaining) →</span>
+                <div class="abq-node abq-n2">循环二<div class="abq-small abq-mut">事件循环</div></div>
+            </div>
+            <div class="abq-small abq-mut" style="margin-top:10px">循环二每轮 poll 返回后二选一：</div>
+            <div class="abq-branches">
+                <div class="abq-branch abq-b2">msg ≠ null → applyMessage<div class="abq-small abq-mut">停轮巡 / 断点续传 / 从头跑</div></div>
+                <div class="abq-branch abq-bq">null（超时到点）→ doTick<div class="abq-small abq-mut">各屏切下一条、游标推进</div></div>
+            </div>
+            <ul class="abq-notes">
+                <li><strong>后到覆盖先到</strong>：槽满先取旧再放新（<code>while (!queue.offer(msg)) queue.poll();</code>）——循环二只关心"最新想让我跑什么"，被覆盖的旧消息作废，它从未被执行</li>
+                <li><strong>poll(remaining) 一箭双雕</strong>：返回消息 → 立刻应用配置；返回 null → 到点执行节拍切屏。等消息的时间就是等节拍的时间，改间隔不用重建定时器</li>
+            </ul>
+        </div>
+    </section>
+
+    <section class="abq-sec" style="--acc:#16a34a;--accbg:#f0fdf4;--accbd:#bbf7d0">
+        <div class="abq-sec-head"><span class="abq-badge">3</span><span>一次 poll(remaining)，两种醒法</span></div>
+        <div class="abq-sec-body">
+            <p class="abq-small abq-mut" style="margin-top:0">循环二不是"睡满 remaining 再看队列"，而是<strong style="color:#1f2937">"最多睡 remaining，谁先到醒谁"</strong>：poll(remaining) 一次阻塞同时在等两件事——① 槽里来了消息（offer → unpark，提前醒）；② remaining 归零（内核定时器到点，超时醒）。醒来时不需要再看队列，<strong style="color:#1f2937">醒的原因本身就说明了结果</strong>。下面两张时序图分别对应这两种醒法：</p>
+
+            <div class="seq-title seq-title-a">情形 A ｜ 槽里来了消息 —— 被 offer 提前叫醒（醒得早：remaining 还剩 30 多秒就醒了）</div>
+            <div class="abq-seq-scroll">
+                <div class="seq-canvas">
+                    <div class="seq-lifeline" style="left:12.5%"></div>
+                    <div class="seq-lifeline" style="left:37.5%"></div>
+                    <div class="seq-lifeline" style="left:62.5%"></div>
+                    <div class="seq-lifeline" style="left:87.5%"></div>
+
+                    <div class="seq-headrow">
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#eff6ff;border-color:#2563eb;color:#1e40af">循环一</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#fffbeb;border-color:#d97706;color:#92400e">槽 · 容量1</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#f1f5f9;border-color:#64748b;color:#334155">内核调度器</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#f0fdf4;border-color:#16a34a;color:#166534">循环二</span></div>
+                    </div>
+
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:40%"><span class="seq-no" style="background:#16a34a">1</span>poll(remaining ≈ 37s)</div>
+                        <div class="seq-line" style="left:37.5%;width:50%"></div>
+                        <i class="seq-head seq-head-left" style="left:37.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:38%"><span class="seq-no" style="background:#d97706">2</span>槽空 → park 挂起（WAITING，CPU 0%）</div>
+                        <div class="seq-line dashed" style="left:37.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right" style="left:62.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:46px">
+                        <div class="seq-note" style="left:50%;width:42%">睡死等叫醒：不占 CPU，倒计时归内核</div>
+                    </div>
+                    <div class="seq-row" style="height:34px">
+                        <div class="seq-self" style="left:15%"><span class="seq-no" style="background:#2563eb">3</span>fetch → 判定键变化 → 先写 cache.json</div>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:14%"><span class="seq-no" style="background:#2563eb">4</span>offer(方案B · v2)</div>
+                        <div class="seq-line" style="left:12.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right" style="left:37.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:38.5%"><span class="seq-no" style="background:#d97706">5</span>notEmpty.signal → unpark</div>
+                        <div class="seq-line" style="left:37.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right" style="left:62.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:48px">
+                        <div class="seq-label seq-em" style="left:52%"><span class="seq-no" style="background:#64748b">6</span>立刻恢复运行（微秒级，无视 remaining）</div>
+                        <div class="seq-line dashed green" style="left:62.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right seq-head-green" style="left:87.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:44%"><span class="seq-no" style="background:#16a34a">7</span>取走消息，槽又空了</div>
+                        <div class="seq-line" style="left:37.5%;width:50%"></div>
+                        <i class="seq-head seq-head-left" style="left:37.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:34px">
+                        <div class="seq-self" style="right:1%"><span class="seq-no" style="background:#16a34a">8</span>applyMessage → 从头跑 / 断点续传 → 切屏</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="seq-title seq-title-b">情形 B ｜ 全程无消息 —— 睡满 remaining，节拍点被定时器叫醒（醒得晚：到点才醒，poll 返回 null）</div>
+            <div class="abq-seq-scroll">
+                <div class="seq-canvas">
+                    <div class="seq-lifeline" style="left:12.5%"></div>
+                    <div class="seq-lifeline" style="left:37.5%"></div>
+                    <div class="seq-lifeline" style="left:62.5%"></div>
+                    <div class="seq-lifeline" style="left:87.5%"></div>
+
+                    <div class="seq-headrow">
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#eff6ff;border-color:#2563eb;color:#1e40af">循环一</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#fffbeb;border-color:#d97706;color:#92400e">槽 · 容量1</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#f1f5f9;border-color:#64748b;color:#334155">内核调度器</span></div>
+                        <div class="seq-pc"><span class="seq-pbox" style="background:#f0fdf4;border-color:#16a34a;color:#166534">循环二</span></div>
+                    </div>
+
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:40%"><span class="seq-no" style="background:#16a34a">1</span>poll(remaining ≈ 37s)</div>
+                        <div class="seq-line" style="left:37.5%;width:50%"></div>
+                        <i class="seq-head seq-head-left" style="left:37.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:38%"><span class="seq-no" style="background:#d97706">2</span>槽空 → park 挂起（WAITING，CPU 0%）</div>
+                        <div class="seq-line dashed" style="left:37.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right" style="left:62.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:48px">
+                        <div class="seq-note" style="left:50%;width:42%">睡死等叫醒：不占 CPU，倒计时归内核——没人 offer 就没人 unpark，这一次只能等定时器到点</div>
+                    </div>
+                    <div class="seq-row" style="height:34px">
+                        <div class="seq-self" style="left:15%"><span class="seq-no" style="background:#2563eb">3</span>第 10s：fetch → 键没变 → 不 offer（槽一直空）</div>
+                    </div>
+                    <div class="seq-row" style="height:34px">
+                        <div class="seq-self" style="left:15%"><span class="seq-no" style="background:#2563eb">4</span>第 30s：fetch → 键没变 → 不 offer（槽一直空）</div>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:48%"><span class="seq-no" style="background:#64748b">5</span>第 37s：定时器到点 → 超时唤醒（不是 unpark）</div>
+                        <div class="seq-line dashed amber" style="left:62.5%;width:25%"></div>
+                        <i class="seq-head seq-head-right seq-head-amber" style="left:87.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:53%"><span class="seq-no" style="background:#d97706">6</span>poll 返回 null（没等到消息）</div>
+                        <div class="seq-line" style="left:37.5%;width:50%"></div>
+                        <i class="seq-head seq-head-right" style="left:87.5%"></i>
+                    </div>
+                    <div class="seq-row" style="height:34px">
+                        <div class="seq-self" style="right:1%"><span class="seq-no" style="background:#16a34a">7</span>doTick：各屏切下一条、游标推进、重算 nextTickAt</div>
+                    </div>
+                    <div class="seq-row" style="height:44px">
+                        <div class="seq-label" style="left:40%"><span class="seq-no" style="background:#16a34a">8</span>回到 while：poll(新的 remaining) 继续睡</div>
+                        <div class="seq-line" style="left:37.5%;width:50%"></div>
+                        <i class="seq-head seq-head-left" style="left:37.5%"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="abq-wake2">
+                <div class="abq-wk abq-wk-head">
+                    <span></span><span>情形 A ｜ 消息先到</span><span>情形 B ｜ 全程无消息</span>
+                </div>
+                <div class="abq-wk">
+                    <span class="abq-wk-k">谁叫醒</span><span>循环一的 offer：notEmpty.signal → unpark</span><span>内核定时器到期：超时唤醒</span>
+                </div>
+                <div class="abq-wk">
+                    <span class="abq-wk-k">醒的时刻</span><span>remaining 还剩 30 多秒就醒（微秒级延迟）</span><span>恰好睡满 remaining，节拍点准点醒</span>
+                </div>
+                <div class="abq-wk">
+                    <span class="abq-wk-k">poll 返回</span><span>消息（msg ≠ null）</span><span>null</span>
+                </div>
+                <div class="abq-wk">
+                    <span class="abq-wk-k">接着干嘛</span><span>applyMessage：停轮巡 / 从头跑 / 断点续传补切</span><span>doTick：各屏切下一条、游标推进</span>
+                </div>
+                <div class="abq-wk">
+                    <span class="abq-wk-k">醒来要看队列吗</span><span>不用——被提前叫醒，就说明有消息</span><span>不用——睡满才醒，就说明没消息</span>
+                </div>
+            </div>
+            <p class="abq-small abq-mut" style="margin:8px 2px 0">两种醒法殊途同归：干完活回到循环开头，用<strong style="color:#1f2937">重新计算的 remaining</strong> 再睡一次——applyMessage 可能改了间隔、doTick 推进了游标，所以每轮的 remaining 都是新的。</p>
+
+            <div class="seq-title seq-title-a" style="margin-top:14px">情形 A 逐步播放 ｜ 从 poll 睡下到被消息拍醒的全过程</div>
+            <div class="abq-stage">
+                <div class="abq-row" id="abq-l1">
+                    <span class="abq-dot" aria-hidden="true"></span>
+                    <span class="abq-who">循环一 <span class="abq-small abq-mut">配置轮询 · 5s</span></span>
+                    <span class="abq-status" id="abq-l1-body"></span>
+                </div>
+                <div class="abq-qrow">
+                    <span class="abq-qlabel">槽 ArrayBlockingQueue(1)</span>
+                    <span class="abq-qslot" id="abq-queue-items"></span>
+                </div>
+                <div class="abq-row abq-l2" id="abq-l2">
+                    <span class="abq-dot" aria-hidden="true"></span>
+                    <span class="abq-who">循环二 <span class="abq-small abq-mut">轮巡事件循环</span></span>
+                    <span class="abq-status" id="abq-l2-body"></span>
+                </div>
+                <div class="abq-phase" id="abq-phase" aria-live="polite"></div>
+                <div class="abq-controls">
+                    <button type="button" class="btn btn-sm" id="abq-prev">上一步</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="abq-next">下一步 ▸</button>
+                    <button type="button" class="btn btn-sm" id="abq-play">自动播放</button>
+                    <span class="abq-small abq-mut" id="abq-stepno" style="margin-left:auto"></span>
+                </div>
+            </div>
+
+            <div class="abq-versus">
+                <div class="abq-vs abq-vs-bad"><strong>✕ 轮询扫描（假设的替代方案）</strong><br>循环二每隔几百毫秒看一眼队列：空看白耗 CPU，消息平均还要多等半个周期才能被发现。</div>
+                <div class="abq-vs abq-vs-good"><strong>✓ 阻塞唤醒（实际方案）</strong><br>poll 空槽 → park 挂起，0% CPU；消息一到 → unpark 微秒级唤醒；没消息 → 睡满 remaining 准点切屏。即到即收、到点即切，零轮询。</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="abq-sec" style="--acc:#7c3aed;--accbg:#f5f3ff;--accbd:#ddd6fe">
+        <div class="abq-sec-head"><span class="abq-badge">4</span><span>容量 1 的脾气：后到覆盖先到</span></div>
+        <div class="abq-sec-body abq-demo">
+            <div class="abq-qrow" style="margin-left:0">
+                <span class="abq-qlabel">槽 ArrayBlockingQueue(1)</span>
+                <span class="abq-qslot" id="abq-d-slot"></span>
+            </div>
+            <div class="abq-controls">
+                <button type="button" class="btn btn-sm" id="abq-d-a">循环一：offer(方案A·v1)</button>
+                <button type="button" class="btn btn-sm" id="abq-d-b">循环一：offer(方案B·v2)</button>
+                <button type="button" class="btn btn-sm" id="abq-d-poll">循环二：poll()</button>
+            </div>
+            <div class="abq-small abq-mut" id="abq-d-log" aria-live="polite">槽空。循环二正阻塞在 poll 上等待。</div>
+        </div>
+    </section>
+
+    <div class="abq-final">一句话：循环二睡在 poll(remaining) 上，谁先到醒谁——消息一到，循环一 offer 的瞬间把它拍醒（提前醒，返回消息）；没有消息，内核定时器到点叫醒它（准点醒，返回 null 切屏）。一次阻塞、两种醒法，这就是两个循环之间的握手方式。</div>
+</div>
+
+<style>
+#abq-explainer { background: #ffffff; color: #1f2937; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 20px; }
+#abq-explainer h2 { margin: 0 0 2px; }
+#abq-explainer .abq-sub { margin: 0 0 4px; }
+#abq-explainer .abq-lg { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px 0 2px; white-space: nowrap; }
+#abq-explainer .abq-lgdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+#abq-explainer .abq-sec { border: 1px solid #e2e8f0; border-radius: 10px; margin: 14px 0 0; overflow: hidden; background: #ffffff; }
+#abq-explainer .abq-sec-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--accbg); border-bottom: 1px solid var(--accbd); font-weight: 500; }
+#abq-explainer .abq-badge { width: 20px; height: 20px; border-radius: 50%; background: var(--acc); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+#abq-explainer .abq-sec-body { padding: 12px 14px; }
+#abq-explainer .abq-traits { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+#abq-explainer .abq-trait { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; background: var(--tbg); border: 1px solid var(--tbd); border-radius: 8px; }
+#abq-explainer .abq-trait svg { color: var(--tacc); flex-shrink: 0; margin-top: 2px; }
+#abq-explainer .abq-flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; justify-content: center; }
+#abq-explainer .abq-node { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; text-align: center; font-weight: 500; }
+#abq-explainer .abq-n1 { background: #eff6ff; border-color: #2563eb; color: #1e40af; }
+#abq-explainer .abq-n2 { background: #f0fdf4; border-color: #16a34a; color: #166534; }
+#abq-explainer .abq-nq { background: #fffbeb; border: 1.5px dashed #d97706; color: #92400e; }
+#abq-explainer .abq-arrow { align-self: center; color: #64748b; font-size: 12px; }
+#abq-explainer .abq-branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; margin-top: 6px; }
+#abq-explainer .abq-branch { border-radius: 8px; padding: 8px 12px; font-weight: 500; text-align: center; border: 1px solid; }
+#abq-explainer .abq-b2 { background: #f0fdf4; border-color: #16a34a; color: #166534; }
+#abq-explainer .abq-bq { background: #fffbeb; border: 1.5px dashed #d97706; color: #92400e; }
+#abq-explainer .abq-notes { padding-left: 18px; margin: 10px 0 0; }
+#abq-explainer .abq-notes li { margin-bottom: 4px; }
+#abq-explainer .abq-seq-scroll { overflow-x: auto; margin: 8px 0 2px; }
+#abq-explainer .seq-canvas { position: relative; min-width: 640px; }
+#abq-explainer .seq-lifeline { position: absolute; top: 48px; bottom: 4px; border-left: 1.5px dashed #cbd5e1; }
+#abq-explainer .seq-headrow { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 10px; }
+#abq-explainer .seq-pc { display: flex; justify-content: center; }
+#abq-explainer .seq-pbox { border: 1.5px solid; border-radius: 6px; padding: 5px 12px; font-weight: 500; font-size: 12px; white-space: nowrap; }
+#abq-explainer .seq-title { font-weight: 500; font-size: 12.5px; padding: 6px 10px; border-radius: 6px; margin: 14px 0 6px; }
+#abq-explainer .seq-title-a { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+#abq-explainer .seq-title-b { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+#abq-explainer .seq-row { position: relative; }
+#abq-explainer .seq-label { position: absolute; top: 3px; font-size: 11px; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+#abq-explainer .seq-label.seq-em { color: #166534; font-weight: 500; }
+#abq-explainer .seq-no { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px; border-radius: 50%; color: #fff; font-size: 10px; flex-shrink: 0; }
+#abq-explainer .seq-line { position: absolute; bottom: 10px; height: 0; border-top: 1.5px solid #334155; }
+#abq-explainer .seq-line.dashed { border-top-style: dashed; }
+#abq-explainer .seq-line.green { border-top-color: #16a34a; }
+#abq-explainer .seq-line.amber { border-top-color: #d97706; }
+#abq-explainer .seq-head { position: absolute; bottom: 5px; width: 0; height: 0; border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent; }
+#abq-explainer .seq-head-left { border-right: 8px solid #334155; margin-left: -7px; }
+#abq-explainer .seq-head-right { border-left: 8px solid #334155; margin-left: -1px; }
+#abq-explainer .seq-head-green { border-left-color: #16a34a; }
+#abq-explainer .seq-head-amber { border-left-color: #d97706; }
+#abq-explainer .seq-note { position: absolute; top: 8px; background: #fffbeb; border: 1px solid #d97706; color: #92400e; border-radius: 6px; padding: 5px 8px; font-size: 11px; text-align: center; }
+#abq-explainer .seq-self { position: absolute; top: 8px; font-size: 11px; display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+#abq-explainer .abq-wake2 { display: grid; grid-template-columns: 108px 1fr 1fr; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-top: 14px; font-size: 12px; }
+#abq-explainer .abq-wk { display: contents; }
+#abq-explainer .abq-wk > span { padding: 7px 10px; border-top: 1px solid #e2e8f0; }
+#abq-explainer .abq-wk > span + span { border-left: 1px solid #e2e8f0; }
+#abq-explainer .abq-wk-head > span { border-top: 0; background: #f8fafc; font-weight: 500; }
+#abq-explainer .abq-wk-head > span:nth-child(2) { color: #166534; background: #f0fdf4; }
+#abq-explainer .abq-wk-head > span:nth-child(3) { color: #92400e; background: #fffbeb; }
+#abq-explainer .abq-wk-k { color: #64748b; font-weight: 500; background: #f8fafc; }
+#abq-explainer .abq-stage { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; background: #f8fafc; margin-top: 6px; }
+#abq-explainer .abq-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #ffffff; border: 1px solid #e2e8f0; border-left: 3px solid #cbd5e1; border-radius: 6px; transition: background .3s, border-color .3s; }
+#abq-explainer .abq-row.is-active { border-left-color: #2563eb; background: #eff6ff; }
+#abq-explainer .abq-row.abq-l2.is-active { border-left-color: #16a34a; background: #f0fdf4; }
+#abq-explainer .abq-dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; flex-shrink: 0; }
+#abq-explainer .abq-row.is-active .abq-dot { background: #2563eb; }
+#abq-explainer .abq-row.abq-l2.is-active .abq-dot { background: #16a34a; }
+#abq-explainer .abq-who { font-weight: 500; white-space: nowrap; }
+#abq-explainer .abq-status { font-size: 12px; }
+#abq-explainer .abq-qrow { display: flex; align-items: center; gap: 10px; margin-left: 24px; }
+#abq-explainer .abq-qlabel { font-size: 12px; color: #64748b; white-space: nowrap; }
+#abq-explainer .abq-qslot { display: inline-flex; align-items: center; min-height: 30px; min-width: 130px; border: 1.5px dashed #d97706; background: #fffbeb; border-radius: 8px; padding: 3px 10px; }
+#abq-explainer .abq-chip { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; border-radius: 6px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
+#abq-explainer .abq-phase { min-height: 34px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 10px; font-size: 12px; }
+#abq-explainer .abq-stepbadge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 50%; background: #16a34a; color: #fff; font-size: 11px; margin-right: 6px; }
+#abq-explainer .abq-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+#abq-explainer .abq-versus { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; margin-top: 10px; }
+#abq-explainer .abq-vs { border-radius: 8px; padding: 9px 12px; font-size: 12px; border: 1px solid; }
+#abq-explainer .abq-vs-bad { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+#abq-explainer .abq-vs-good { background: #f0fdf4; border-color: #86efac; color: #14532d; }
+#abq-explainer .abq-demo { display: flex; flex-direction: column; gap: 10px; }
+#abq-explainer .abq-final { margin-top: 14px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #334155; border-radius: 8px; font-size: 13px; }
+#abq-explainer .abq-mut { color: #64748b; }
+#abq-explainer .abq-small { font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { #abq-explainer * { transition: none !important; } }
+</style>
+
+<script>
+(function () {
+    var root = document.getElementById('abq-explainer');
+    if (!root) return;
+
+    /* ---------- 分步演示：情形 A 一次唤醒的完整时序 ---------- */
+    var phases = [
+        { cap: '循环二调用 poll(remaining)。槽是空的 → 线程被 park 挂起：从 OS 调度器摘除，不占 CPU；"最多等 remaining"的倒计时交给内核定时器。',
+          l1: '每 5s 醒来拉一次配置（sleep 5s → fetch）', l2: 'poll(remaining≈37s) → 槽空 → park 挂起（CPU 0%）', q: null, hl: 'l2' },
+        { cap: '循环一拉到配置，判定键（方案id, plan_version）变了 → 先写 cache.json（先盘后投：保证消费方取到消息时，盘上与内存一致）。',
+          l1: 'fetch → 键变化 → 写 cache.json ✔', l2: '仍在 park 中（它什么都不知道，也不用知道）', q: null, hl: 'l1' },
+        { cap: 'offer 入槽的同一瞬间，notEmpty 条件 signal → unpark：内核立刻把循环二放回可运行队列。此刻 remaining 还剩 30 多秒——它不是等超时才醒的。',
+          l1: 'offerOverwrite(msg) → signal 唤醒', l2: '被 unpark 唤醒（微秒级）→ poll 返回消息', q: '方案B · v2', hl: 'both' },
+        { cap: '循环二拿消息 → applyMessage：键不匹配 → 从头跑（立即切各屏第 1 条、按新间隔重排节拍）；键匹配 → 断点续传（补切各屏当前线路对齐）。',
+          l1: '本轮结束，继续睡 5s', l2: 'applyMessage → 切屏 / 续传', q: null, hl: 'l2' },
+        { cap: '处理完回到 while：重新 poll(新的 remaining)。无消息就睡到节拍点（poll 返回 null → doTick 切屏）——等消息和等节拍是同一次阻塞。',
+          l1: '睡 5s', l2: 'poll(下一节拍剩余时间) → 继续待命', q: null, hl: 'l2' }
+    ];
+    var idx = 0, timer = null;
+    var elPhase = document.getElementById('abq-phase');
+    var elStep = document.getElementById('abq-stepno');
+    var elL1 = document.getElementById('abq-l1');
+    var elL2 = document.getElementById('abq-l2');
+    var elL1b = document.getElementById('abq-l1-body');
+    var elL2b = document.getElementById('abq-l2-body');
+    var elQ = document.getElementById('abq-queue-items');
+    var btnPlay = document.getElementById('abq-play');
+    var CIRC = '①②③④⑤⑥⑦⑧⑨⑩';
+
+    function render() {
+        var p = phases[idx];
+        elPhase.innerHTML = '<span class="abq-stepbadge">' + CIRC[idx] + '</span>' + p.cap;
+        elStep.textContent = '第 ' + (idx + 1) + ' / ' + phases.length + ' 步';
+        elL1b.textContent = p.l1;
+        elL2b.textContent = p.l2;
+        elL1.classList.toggle('is-active', p.hl === 'l1' || p.hl === 'both');
+        elL2.classList.toggle('is-active', p.hl === 'l2' || p.hl === 'both');
+        elQ.innerHTML = p.q ? '<span class="abq-chip">' + p.q + '</span>' : '<span class="abq-small abq-mut">（空）</span>';
+    }
+    function stopPlay() {
+        if (timer) { clearInterval(timer); timer = null; btnPlay.textContent = '自动播放'; }
+    }
+    document.getElementById('abq-next').addEventListener('click', function () { stopPlay(); idx = (idx + 1) % phases.length; render(); });
+    document.getElementById('abq-prev').addEventListener('click', function () { stopPlay(); idx = (idx - 1 + phases.length) % phases.length; render(); });
+    btnPlay.addEventListener('click', function () {
+        if (timer) { stopPlay(); return; }
+        btnPlay.textContent = '停止';
+        timer = setInterval(function () { idx = (idx + 1) % phases.length; render(); }, 2200);
+    });
+    render();
+
+    /* ---------- 容量 1 覆盖演示 ---------- */
+    var slot = null;
+    var elSlot = document.getElementById('abq-d-slot');
+    var elLog = document.getElementById('abq-d-log');
+    function dRender(msg) {
+        if (slot) { elSlot.className = 'abq-chip'; elSlot.textContent = slot; }
+        else { elSlot.className = 'abq-small abq-mut'; elSlot.textContent = '（空）'; }
+        elLog.textContent = msg;
+    }
+    document.getElementById('abq-d-a').addEventListener('click', function () {
+        slot = '方案A · v1';
+        dRender('offer(A·v1) → 入槽。循环二被唤醒，将从头跑方案A v1。');
+    });
+    document.getElementById('abq-d-b').addEventListener('click', function () {
+        if (slot) {
+            var old = slot; slot = '方案B · v2';
+            dRender('offer(B·v2) → 槽满，先取旧再放新：[' + old + '] 被覆盖作废（从未执行），槽内只剩最新态。');
+        } else {
+            slot = '方案B · v2';
+            dRender('offer(B·v2) → 入槽。');
+        }
+    });
+    document.getElementById('abq-d-poll').addEventListener('click', function () {
+        if (slot) { var got = slot; slot = null; dRender('poll → 取到 [' + got + ']，槽空；循环二应用该配置。'); }
+        else { dRender('poll → null（超时没等到消息）→ 到点执行节拍切屏。'); }
+    });
+    dRender('槽空。循环二正阻塞在 poll 上等待。');
+})();
+</script>

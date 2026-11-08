@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nacos 原理与工程中的应用 — 2026-10-09</title>
+<style>
+  :root {
+    --blue: #2b6cb0; --blue-light: #ebf4ff; --blue-border: #90cdf4;
+    --green: #2f855a; --green-light: #f0fff4; --green-border: #9ae6b4;
+    --orange: #c05621; --orange-light: #fffaf0; --orange-border: #fbd38d;
+    --gray: #4a5568; --gray-light: #f7fafc; --gray-border: #e2e8f0;
+    --purple: #6b46c1; --purple-light: #faf5ff; --purple-border: #d6bcfa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    max-width: 1100px; margin: 0 auto; padding: 24px 32px 64px;
+    color: #2d3748; line-height: 1.7; background: #fff;
+  }
+  h1 { font-size: 26px; border-bottom: 3px solid var(--blue); padding-bottom: 10px; }
+  h1 small { font-size: 14px; color: #718096; font-weight: normal; margin-left: 12px; }
+  h2 { font-size: 20px; margin-top: 40px; color: var(--blue);
+       border-left: 5px solid var(--blue); padding-left: 12px; }
+  h3 { font-size: 16px; margin-top: 24px; }
+  code { background: #edf2f7; padding: 1px 6px; border-radius: 4px;
+         font-family: Consolas, monospace; font-size: 13px; color: #805ad5; }
+  pre { background: #1a202c; color: #e2e8f0; padding: 14px 18px; border-radius: 8px;
+        overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--gray-border); padding: 8px 12px; text-align: left; }
+  th { background: var(--gray-light); }
+  .card { border: 1px solid var(--gray-border); border-radius: 10px;
+          padding: 16px 20px; margin: 16px 0; background: var(--gray-light); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 10px; border-radius: 999px;
+         margin-right: 6px; border: 1px solid; }
+  .tag-blue   { color: var(--blue);   background: var(--blue-light);   border-color: var(--blue-border); }
+  .tag-green  { color: var(--green);  background: var(--green-light);  border-color: var(--green-border); }
+  .tag-orange { color: var(--orange); background: var(--orange-light); border-color: var(--orange-border); }
+  .figure { background: #fdfdfd; border: 1px solid var(--gray-border);
+            border-radius: 10px; padding: 10px; margin: 18px 0; }
+  .figure figcaption { text-align: center; font-size: 13px; color: #718096; padding: 8px 0 2px; }
+  .note { border-left: 4px solid var(--orange); background: var(--orange-light);
+          padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+  .tip { border-left: 4px solid var(--green); background: var(--green-light);
+         padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+  ul { padding-left: 22px; }
+  .kbd { border: 1px solid #cbd5e0; border-bottom-width: 2px; border-radius: 4px;
+         background: #fff; padding: 0 6px; font-size: 12px; font-family: Consolas, monospace; }
+</style>
+</head>
+<body>
+
+<h1>Nacos 原理与工程中的应用 <small>整理日期 2026-10-09 · 应急项目（JeecgBoot 微服务）</small></h1>
+
+<div class="card">
+  <b>一句话总结：</b>Nacos = <span class="tag tag-blue">服务注册发现</span> + <span class="tag tag-green">配置中心</span>。
+  前者解决「<b>找谁调</b>」，后者解决「<b>配置放哪</b>」。
+  我们的生产地址：<code>http://10.240.9.22:8848/nacos/</code>（账号密码默认 <code>nacos / nacos</code>，工程中未配置额外凭据，说明鉴权大概率未开启）。
+</div>
+
+<h2>一、两大职责对比</h2>
+
+<table>
+  <tr><th style="width:14%"></th><th>① 服务注册与发现</th><th>② 配置中心</th></tr>
+  <tr><th>解决什么</th><td>服务之间互相找不到对方地址</td><td>几十个服务的配置散落各处、改一次要重启一次</td></tr>
+  <tr><th>怎么工作</th><td>服务启动时「报到」，调用时「查电话簿」，挂了自动「除名」</td><td>配置集中存放，启动时拉取，改配置可热推送</td></tr>
+  <tr><th>类比</th><td>通讯录 + 实时点名</td><td>全体服务共用的公共配置文件柜</td></tr>
+  <tr><th>谁做负载均衡</th><td><b>调用方客户端</b>（Nacos 只提供名单，不替你转发流量）</td><td>—</td></tr>
+  <tr><th>工程中的体现</th><td>服务列表页可见 <code>jeecg-task</code> → <code>172.17.0.10:7003</code></td><td><code>jeecg.yaml</code> 里集中放数据库/Redis/MinIO 生产密码</td></tr>
+</table>
+
+<div class="note">
+  <b>常见误区纠正：</b>Nacos 本身<b>不做</b>请求转发，它不是网关也不是 Nginx。它只维护一张
+  「服务名 → 存活实例列表」的表；真正决定调哪个实例的是<b>调用方</b>（Feign/Ribbon 等客户端负载均衡）。
+</div>
+
+<h2>二、职责①：服务注册与发现</h2>
+
+<h3>完整流程</h3>
+
+<div class="figure">
+<svg viewBox="0 0 980 420" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrB" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#2b6cb0"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#2f855a"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#c05621"/>
+    </marker>
+  </defs>
+
+  <!-- Nacos server -->
+  <rect x="360" y="30" width="260" height="90" rx="10" fill="#ebf4ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="490" y="62" text-anchor="middle" font-size="17" font-weight="bold" fill="#2b6cb0">Nacos 服务端</text>
+  <text x="490" y="86" text-anchor="middle" font-size="13" fill="#4a5568">服务注册表（服务名 → 实例列表）</text>
+  <text x="490" y="106" text-anchor="middle" font-size="13" fill="#4a5568">http://10.240.9.22:8848</text>
+
+  <!-- three services -->
+  <g font-size="13">
+    <rect x="40"  y="240" width="180" height="64" rx="8" fill="#f0fff4" stroke="#2f855a" stroke-width="1.5"/>
+    <text x="130" y="266" text-anchor="middle" font-weight="bold" fill="#2f855a">jeecg-system</text>
+    <text x="130" y="288" text-anchor="middle" fill="#4a5568">:7001（生产 pod）</text>
+
+    <rect x="280" y="240" width="180" height="64" rx="8" fill="#f0fff4" stroke="#2f855a" stroke-width="1.5"/>
+    <text x="370" y="266" text-anchor="middle" font-weight="bold" fill="#2f855a">jeecg-yj</text>
+    <text x="370" y="288" text-anchor="middle" fill="#4a5568">:7002</text>
+
+    <rect x="520" y="240" width="180" height="64" rx="8" fill="#f0fff4" stroke="#2f855a" stroke-width="1.5"/>
+    <text x="610" y="266" text-anchor="middle" font-weight="bold" fill="#2f855a">jeecg-task</text>
+    <text x="610" y="288" text-anchor="middle" fill="#4a5568">:7003（172.17.0.10）</text>
+  </g>
+
+  <!-- caller -->
+  <rect x="770" y="240" width="180" height="64" rx="8" fill="#fffaf0" stroke="#c05621" stroke-width="1.5"/>
+  <text x="860" y="266" text-anchor="middle" font-size="14" font-weight="bold" fill="#c05621">调用方（Feign）</text>
+  <text x="860" y="288" text-anchor="middle" font-size="12" fill="#4a5568">想调 jeecg-system</text>
+
+  <!-- step 1: register -->
+  <line x1="130" y1="240" x2="400" y2="122" stroke="#2f855a" stroke-width="2" marker-end="url(#arrG)"/>
+  <text x="180" y="165" font-size="13" fill="#2f855a" font-weight="bold">① 启动时注册「报到」</text>
+  <text x="180" y="183" font-size="12" fill="#4a5568">上报自己的 IP:端口</text>
+
+  <line x1="370" y1="240" x2="470" y2="122" stroke="#2f855a" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="610" y1="240" x2="545" y2="122" stroke="#2f855a" stroke-width="2" marker-end="url(#arrG)"/>
+
+  <!-- step 2: heartbeat -->
+  <path d="M 490 230 L 490 122" stroke="#6b46c1" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrB)"/>
+  <text x="500" y="215" font-size="12" fill="#6b46c1">② 心跳保活</text>
+  <text x="500" y="232" font-size="12" fill="#6b46c1">超时未上报 → 自动摘除</text>
+
+  <!-- step 3: pull list -->
+  <line x1="820" y1="240" x2="580" y2="122" stroke="#c05621" stroke-width="2" marker-end="url(#arrR)"/>
+  <text x="690" y="165" font-size="13" fill="#c05621" font-weight="bold">③ 按「服务名」查实例列表</text>
+  <text x="690" y="183" font-size="12" fill="#4a5568">「给我 jeecg-system 的健康实例」</text>
+
+  <!-- step 4: direct call -->
+  <path d="M 860 304 C 860 380, 250 380, 140 306" stroke="#2b6cb0" stroke-width="2.5" fill="none" marker-end="url(#arrB)"/>
+  <text x="500" y="375" text-anchor="middle" font-size="13" fill="#2b6cb0" font-weight="bold">④ 调用方从列表中挑一个实例，直接发 HTTP 请求（客户端负载均衡）</text>
+  <text x="500" y="395" text-anchor="middle" font-size="12" fill="#718096">流量不经过 Nacos —— Nacos 只是「通讯录」，不是转发者</text>
+</svg>
+<figcaption>图 1 · 服务注册与发现：注册 → 心跳 → 查列表 → 客户端直连调用</figcaption>
+</div>
+
+<ul>
+  <li><b>注册</b>：服务启动后向 Nacos 上报 <code>服务名 + IP:端口</code>；</li>
+  <li><b>心跳</b>：定期续约证明自己活着，宕机实例会被自动摘除，流量不再打到坏节点；</li>
+  <li><b>发现</b>：调用方按服务名拉取健康实例列表（还会监听变更，实例上下线实时推送）；</li>
+  <li><b>调用</b>：调用方在列表里选一个直接请求 —— 这就是「负载均衡在客户端」的含义。</li>
+</ul>
+
+<h2>三、职责②：配置中心</h2>
+
+<div class="figure">
+<svg viewBox="0 0 980 300" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrB2" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#2b6cb0"/>
+    </marker>
+  </defs>
+
+  <!-- config cabinet -->
+  <rect x="330" y="20" width="320" height="230" rx="10" fill="#ebf4ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="490" y="52" text-anchor="middle" font-size="16" font-weight="bold" fill="#2b6cb0">Nacos 配置中心（文件柜）</text>
+  <g font-size="13" font-family="Consolas, monospace">
+    <rect x="360" y="70"  width="260" height="30" rx="5" fill="#fff" stroke="#90cdf4"/>
+    <text x="372" y="90" fill="#2d3748">jeecg.yaml（公共：DB/Redis/MinIO…）</text>
+    <rect x="360" y="110" width="260" height="30" rx="5" fill="#fff" stroke="#90cdf4"/>
+    <text x="372" y="130" fill="#2d3748">jeecg-rabbitmq.yaml</text>
+    <rect x="360" y="150" width="260" height="30" rx="5" fill="#fff" stroke="#90cdf4"/>
+    <text x="372" y="170" fill="#2d3748">jeecg-dev.yaml / jeecg-yj.yaml</text>
+    <rect x="360" y="190" width="260" height="30" rx="5" fill="#fff" stroke="#90cdf4"/>
+    <text x="372" y="210" fill="#2d3748">task.properties</text>
+  </g>
+
+  <!-- services pull -->
+  <g font-size="13">
+    <rect x="60"  y="105" width="170" height="56" rx="8" fill="#f0fff4" stroke="#2f855a" stroke-width="1.5"/>
+    <text x="145" y="128" text-anchor="middle" font-weight="bold" fill="#2f855a">jeecg-yj</text>
+    <text x="145" y="148" text-anchor="middle" fill="#4a5568">启动时拉取</text>
+
+    <rect x="750" y="105" width="170" height="56" rx="8" fill="#f0fff4" stroke="#2f855a" stroke-width="1.5"/>
+    <text x="835" y="128" text-anchor="middle" font-weight="bold" fill="#2f855a">jeecg-task</text>
+    <text x="835" y="148" text-anchor="middle" fill="#4a5568">启动时拉取</text>
+  </g>
+
+  <line x1="230" y1="118" x2="355" y2="95"  stroke="#2b6cb0" stroke-width="2" marker-end="url(#arrB2)"/>
+  <line x1="230" y1="145" x2="355" y2="180" stroke="#2b6cb0" stroke-width="2" marker-end="url(#arrB2)"/>
+  <line x1="750" y1="118" x2="625" y2="95"  stroke="#2b6cb0" stroke-width="2" marker-end="url(#arrB2)"/>
+  <line x1="750" y1="145" x2="625" y2="180" stroke="#2b6cb0" stroke-width="2" marker-end="url(#arrB2)"/>
+
+  <!-- hot push -->
+  <text x="490" y="278" text-anchor="middle" font-size="13" fill="#6b46c1" font-weight="bold">控制台上改配置 → 长轮询实时推送到所有订阅的服务 → 多数配置免重启生效</text>
+</svg>
+<figcaption>图 2 · 配置中心：各服务启动时按 data-id 拉取配置，控制台修改后热推送</figcaption>
+</div>
+
+<h3>工程中的真实接线（jeecg-module-task 为例）</h3>
+
+<pre><code># jeecg-module-task-start/src/main/resources/application.yml
+spring:
+  application:
+    name: jeecg-task                    # ← 注册进 Nacos 用的服务名
+  config:
+    import:                             # ← 从 Nacos 拉这 4 份配置
+      - optional:nacos:jeecg.yaml
+      - optional:nacos:jeecg-rabbitmq.yaml
+      - optional:nacos:jeecg-dev.yaml
+      - optional:nacos:task.properties
+  cloud:
+    nacos:
+      config:
+        server-addr: @config.server-addr@   # ← Maven profile 替换，prod 时 = 10.240.9.22:8848
+      discovery:
+        server-addr: ${spring.cloud.nacos.config.server-addr}</code></pre>
+
+<div class="note">
+  <b>这正是上次找生产 MinIO 配置没找到的原因：</b>仓库里的 <code>application-dev.yml</code> / <code>application-live.yml</code>
+  只是本地/兜底配置；生产启动时 Nacos 上的 <code>jeecg.yaml</code> 等会<b>覆盖</b>它们。
+  所以生产的 <code>jeecg.minio.minio_url / minio_name / minio_pass</code> 要登录 Nacos 控制台 →
+  「配置管理 → 配置列表」→ 打开 <code>jeecg.yaml</code> 查看。
+</div>
+
+<h2>四、工程速查表</h2>
+
+<table>
+  <tr><th>项</th><th>值</th></tr>
+  <tr><td>控制台地址</td><td><code>http://10.240.9.22:8848/nacos/</code></td></tr>
+  <tr><td>账号密码</td><td><code>nacos / nacos</code>（工程内无任何 Nacos 凭据配置，若登录页进不去依次试：免鉴权直接进 → nacos/nacos → 找运维查 users 表）</td></tr>
+  <tr><td>注册的微服务</td><td><code>jeecg-system</code>(7001) · <code>jeecg-yj</code>(7002) · <code>jeecg-task</code>(7003)，生产实例 <code>172.17.0.10:7003</code></td></tr>
+  <tr><td>Maven profile 切换</td><td><code>pom.xml</code> 中 <code>&lt;config.server-addr&gt;10.240.9.22:8848&lt;/...&gt;</code>（cocc-prod profile）</td></tr>
+  <tr><td>本地起服务连生产 Nacos</td><td>加 <code>--spring.cloud.nacos.config.server-addr=10.240.9.22:8848</code> 和 <code>--spring.cloud.nacos.discovery.register-enabled=false</code>（不注册，避免污染生产名单）</td></tr>
+  <tr><td>同机其他中间件</td><td>Redis <code>:16379</code> · RabbitMQ <code>:5672</code> · ES <code>:9100</code>（MinIO 不在这台机器，现场为 <code>10.240.9.18:9000</code>）</td></tr>
+</table>
+
+<div class="tip">
+  <b>什么时候需要关心 Nacos？</b>
+  <ul style="margin:6px 0 0">
+    <li>单体启动（jeecg-system-start 直接跑 application-dev.yml）→ <b>用不到</b>，Nacos 是微服务/集群部署才必需；</li>
+    <li>要改生产配置（数据库、Redis、MinIO、MQ 队列名…）→ 去<b>配置中心</b>看；</li>
+    <li>要排查「服务互相调不通」→ 去<b>服务列表</b>看实例是否注册、是否健康。</li>
+  </ul>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代理 vs VPN:报文之旅</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --ip: #7c3aed; --ip-bg: #ede9fe;
+    --tcp: #2563eb; --tcp-bg: #dbeafe;
+    --app: #059669; --app-bg: #d1fae5;
+    --enc: #b45309; --enc-bg: #fef3c7;
+    --new: #dc2626; --new-bg: #fee2e2;
+    --ink: #1e293b; --muted: #64748b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: var(--ink); background: #f1f5f9; margin: 0; padding: 0;
+    line-height: 1.75;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 28px; border-bottom: 3px solid var(--ink); padding-bottom: 12px; }
+  h2 {
+    font-size: 22px; margin-top: 56px;
+    border-left: 6px solid var(--ip); padding-left: 12px;
+  }
+  h3 { font-size: 17px; margin-top: 32px; }
+  .card {
+    background: #fff; border-radius: 12px; padding: 20px 24px; margin: 16px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  .mermaid { display: flex; justify-content: center; background: #fff; padding: 8px; border-radius: 8px; }
+
+  /* ---- 报文结构条 ---- */
+  .pkt { display: flex; width: 100%; margin: 6px 0; border: 2px solid var(--ink); border-radius: 6px; overflow: hidden; }
+  .seg { padding: 8px 10px; font-size: 13px; text-align: center; flex: 1; min-width: 0; }
+  .seg small { display: block; font-size: 11px; opacity: .75; }
+  .seg.ip   { background: var(--ip-bg);   color: var(--ip);   border-right: 1px dashed var(--ip); }
+  .seg.tcp  { background: var(--tcp-bg);  color: var(--tcp);  border-right: 1px dashed var(--tcp); }
+  .seg.app  { background: var(--app-bg);  color: var(--app); }
+  .seg.enc  { background: repeating-linear-gradient(45deg, var(--enc-bg), var(--enc-bg) 8px, #fde68a 8px, #fde68a 16px); color: var(--enc); }
+  .seg.mod  { background: var(--new-bg);  color: var(--new); font-weight: 600; }
+  .pkt .inner { display: flex; flex: 12; }
+  .pkt-label { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  .pkt-label b { color: var(--ink); }
+
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 14px; }
+  table.cmp th, table.cmp td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; }
+  table.cmp th { background: #f8fafc; }
+  .note {
+    background: var(--enc-bg); border-left: 4px solid var(--enc);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 14px; margin: 14px 0;
+  }
+  .key { color: var(--new); font-weight: 700; }
+  code { background: #e2e8f0; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin: 10px 0; color: var(--muted); }
+  .legend span::before { content: "■ "; }
+  .legend .l-ip::before { color: var(--ip); }
+  .legend .l-tcp::before { color: var(--tcp); }
+  .legend .l-app::before { color: var(--app); }
+  .legend .l-enc::before { color: var(--enc); }
+  .legend .l-mod::before { color: var(--new); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>代理 vs VPN:一个报文的两种旅行方式</h1>
+<p>
+核心分野只有一句话:<b class="key">代理是"终结 + 中继"</b>——传输层连接在代理处被腰斩成两条,
+原始网络报文从未存在;<b class="key">VPN 是"封装 + 路由"</b>——原始 IP 包作为整体被加密、
+塞进新壳,穿越隧道后原样复活,由内核像路由器一样转发出去。
+</p>
+<div class="legend">
+  <span class="l-ip">IP 头</span>
+  <span class="l-tcp">TCP 头</span>
+  <span class="l-app">应用层载荷</span>
+  <span class="l-enc">加密区</span>
+  <span class="l-mod">被改写/新生成</span>
+</div>
+
+<!-- ==================== 场景一:代理 ==================== -->
+<h2>场景一:源 → 代理 → 目标服务器</h2>
+
+<div class="card">
+<h3>1. 整体流程时序</h3>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant App as 应用<br/>(198.51.100.5)
+    participant Px as 代理<br/>(192.0.2.10:8080)
+    participant Srv as 目标服务器<br/>(example.com / 93.184.216.34)
+
+    App->>Px: 首条消息:CONNECT example.com:443<br/>src=198.51.100.5, dst=192.0.2.10<br/>注意:dst 是代理,不是目标!<br/>真实目标只以域名形式写在应用层消息里
+    Note over Px: 加工点 ①:代理解析(全程唯一一次理解内容)<br/>从消息中读出目标域名（应用层） example.com<br/>→ 代理自己做 DNS 解析,得到 93.184.216.34<br/>→ 新建一条自己的 TCP 连接
+    Px-->>App: 200 连接已建立(隧道就绪)
+    App->>Px: 应用层数据(TLS 密文)<br/>src=198.51.100.5, dst=192.0.2.10(仍是代理)
+    Note over Px: 每次转发时刻<br/>src=198.51.100.5, dst=192.0.2.10<br/>字节从连接①的接收缓冲区读进代理进程<br/>→ 原样写入连接②的发送缓冲区<br/>不解析、不解密、不理解内容
+    Px->>Srv: 同一批字节,装进全新连接<br/>src=192.0.2.10, dst=93.184.216.34<br/>src/dst 由代理内核为这条新连接从头生成<br/>(不是改写,这条连接生来如此)
+    Srv-->>Px: 应答数据(TLS 密文)<br/>src=93.184.216.34 端口443, dst=192.0.2.10<br/>走在连接②上(服务器只认识代理,<br/>它眼里 TCP 对端就是 192.0.2.10)
+    Note over Px: 每次转发时刻<br/>src=93.184.216.34, dst=192.0.2.10<br/>字节从连接②的接收缓冲区读进代理进程<br/>→ 原样写入连接①的发送缓冲区<br/>不解析、不解密、不理解内容
+    Px-->>App: 同一批字节,装进全新连接<br/>src=192.0.2.10 端口8080, dst=198.51.100.5<br/>走在连接①上,应用收到的是完整 TLS 密文,<br/>与 example.com 的应用层会话端到端完好
+</div>
+<p class="pkt-label">
+关键:<b>从应用发出的第一个包起,src=198.51.100.5, dst=192.0.2.10 就再没变过</b>——
+指向真实服务器的网络包(<code>dst=93.184.216.34</code>)在你这边<b>从未存在</b>;
+真实目标只以域名 <code>example.com</code> 的形式写在第一条应用层消息里,由代理解析后自行建连。
+对比场景二:VPN 图里内层 src/dst 一路可追,代理图里"内层"根本不存在。
+</p>
+<div class="note">
+<b>"转发时刻"代理到底做了什么?</b> 每一批字节到达后,代理进程都要做一次
+<code>recv()</code>(从一条连接的内核缓冲区读入自己的用户态缓冲区)加一次
+<code>write()</code>(写入另一条连接的发送缓冲区)——这是字节级的"存储-转发",
+内容零处理(密文它也读不懂),但有两个真实后果:
+<br/>① <b>反压逐跳传导</b>:若应用读得慢,代理→应用方向的缓冲区先填满,代理暂停从服务器读取,
+服务器那边 TCP 窗口收缩、发送放缓——慢会沿着链条往回传。
+<br/>② <b>对比明文模式</b>:以上是 CONNECT 隧道模式;若走明文 HTTP 代理(请求行带绝对 URL),
+代理是<b>真正解析内容</b>的——它能看到并改写一切(缓存、过滤、增删头部),
+这也是企业网关做内容审计、以及"HTTPS 中间人"需要你信任它伪造证书的原因。
+</div>
+</div>
+
+<div class="card">
+<h3>2. 网络层视角:两段报文,头都是"生来如此"</h3>
+
+<div class="pkt-label"><b>第一段(你 → 代理)</b> —— 目的地址从一开始就是代理,没有任何设备改写过它:</div>
+<div class="pkt">
+  <div class="seg ip" style="flex:2">IP 头<small>源=你的IP → <b>目的=代理IP</b></small></div>
+  <div class="seg tcp" style="flex:2">TCP 头<small>你的随机端口 → 8080</small></div>
+  <div class="seg app" style="flex:4">应用层消息<small>CONNECT example.com:443 … 之后是 TLS 密文</small></div>
+</div>
+
+<p class="pkt-label" style="margin-top:14px">
+包到达代理后,<b class="key">外层 IP 头 / TCP 头在代理的内核协议栈里被正常"消费"并丢弃</b>,
+代理进程通过 <code>recv()</code> 拿到的只是纯应用层字节——
+<b>代理从头到尾没有"拆开网络层报文"这个动作,因为报文头根本没被交到它手里</b>。
+</p>
+
+<div class="pkt-label"><b>第二段(代理 → 目标服务器)</b> —— 头由代理的内核为这条全新连接<b>从头生成</b>:</div>
+<div class="pkt">
+  <div class="seg mod" style="flex:2">IP 头(全新)<small>源=<b>代理IP</b> → 目标真实IP</small></div>
+  <div class="seg mod" style="flex:2">TCP 头(全新)<small>代理新端口 → 443,新序列号</small></div>
+  <div class="seg app" style="flex:4">同一批应用层字节<small>原样照抄(代理不解密、不理解)</small></div>
+</div>
+
+<div class="note">
+<b>网络层的"修改"发生在哪?</b> 严格说,<b>没有任何设备改写过网络层报文</b>。
+第二段的头不是"改"出来的,是代理内核为一条<b>全新连接</b>生成的。
+真正被终结的是传输层(TCP 连接腰斩成两段);端到端存活的只剩应用层会话(如 TLS)。
+目标服务器看到的 TCP 对端是<b>代理自己</b>。
+</div>
+</div>
+
+<!-- ==================== 场景二:VPN ==================== -->
+<h2>场景二:源 → VPN 服务器 → 目标服务器</h2>
+
+<div class="card">
+<h3>1. 整体流程时序(去程 + 回程)</h3>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant App as 应用
+    participant Tun as 虚拟网卡<br/>(你的机器)
+    participant Vpn as VPN 服务器
+    participant Srv as 目标服务器<br/>(93.184.216.34)
+
+    App->>Tun: 原始 IP 包<br/>src=10.0.0.2, dst=93.184.216.34<br/>应用无感知,照常发包
+    Note over Tun: 加工点 ①:加密 + 封装<br/>原始包整体成为加密载荷,内层 src/dst 不动<br/>外面套新壳:外层 src=你的公网IP, dst=VPN服务器IP
+    Tun->>Vpn: 加密包<br/>外层 src=你的公网IP, dst=VPN服务器IP<br/>载荷内层 src=10.0.0.2, dst=93.184.216.34
+    Note over Vpn: 加工点 ②:解密 + NAT<br/>解密,内层原样复活<br/>NAT 改写内层源地址:src 10.0.0.2 → VPN服务器IP<br/>dst 不变(全程唯一被改写的 IP)
+    Vpn->>Srv: 内层报文<br/>src=VPN服务器IP(已改写), dst=93.184.216.34<br/>服务器以为客户端就是 VPN 服务器
+    Srv-->>Vpn: 应答<br/>src=93.184.216.34, dst=VPN服务器IP<br/>(服务器只是把源目的对调)
+    Note over Vpn: 加工点 ③:反向 NAT + 封装<br/>NAT 改写内层目的地址:dst VPN服务器IP → 10.0.0.2<br/>再加密 + 套壳:外层 src=VPN服务器IP, dst=你的公网IP
+    Vpn-->>Tun: 加密回程包<br/>外层 src=VPN服务器IP, dst=你的公网IP<br/>载荷内层 src=93.184.216.34, dst=10.0.0.2
+    Note over Tun: 加工点 ④:解密<br/>还原出原始回程包,IP 原样:<br/>src=93.184.216.34, dst=10.0.0.2<br/>经虚拟网卡交给应用
+    Tun-->>App: 原始应答包<br/>src=93.184.216.34, dst=10.0.0.2 原样送达
+</div>
+<p class="pkt-label">
+图中记法约定:<b><code>src=…, dst=…</code> 表示报文的源/目的地址;"A → B" 仅表示一次地址改写(NAT)</b>,
+如 <code>src 10.0.0.2 → VPN服务器IP</code>。这样一眼可查:全程 src/dst 被改写的只有两处,
+都是 NAT 干的(去程改源、回程改目的),且互为精确逆操作;隧道封装从不改写内层地址。
+</p>
+</div>
+
+<div class="card">
+<h3>2. 网络层视角:封装而非改写</h3>
+
+<div class="pkt-label"><b>线上传输的报文(你 → VPN 服务器)</b> —— 原始包整体成为加密载荷,原封不动:</div>
+<div class="pkt">
+  <div class="seg ip" style="flex:2">外层 IP 头<small>你 → VPN服务器</small></div>
+  <div class="seg tcp" style="flex:1">UDP<small>如 51820</small></div>
+  <div class="seg enc" style="flex:9; padding:4px">
+    <small style="display:block;margin-bottom:2px">加密载荷(整个原始 IP 包,含头,一字节不动)</small>
+    <div class="pkt" style="margin:0;border-width:1px">
+      <div class="seg ip" style="flex:2">内层 IP 头<small>10.0.0.2 → 真实服务器</small></div>
+      <div class="seg tcp" style="flex:2">TCP 头<small>你的端口 → 443(端到端活着)</small></div>
+      <div class="seg app" style="flex:4">应用数据</div>
+    </div>
+  </div>
+</div>
+
+<p class="pkt-label" style="margin-top:14px">
+VPN 服务器解密后,把<b>完好的原始包</b>经 TUN 还给内核。多数场景下内核顺手做一步
+<b class="key">SNAT</b>(这才是真正意义上"改写网络层报文"的操作,由 netfilter/conntrack 完成,
+而非隧道本身):
+</p>
+
+<div class="pkt-label"><b>NAT 之后发往目标服务器的报文</b> —— 只有源地址被翻译,其余原样:</div>
+<div class="pkt">
+  <div class="seg mod" style="flex:2">内层 IP 头<small>源被 NAT:<b>10.0.0.2 → VPN公网IP:33333</b>,目的不变</small></div>
+  <div class="seg tcp" style="flex:2">TCP 头<small>原样保留(仅端口随 NAT 映射)</small></div>
+  <div class="seg app" style="flex:4">应用数据<small>原样保留</small></div>
+</div>
+
+<div class="note">
+<b>回程不需要任何人"指挥"。</b> 目标服务器只是把源/目的对调,发回"它以为的客户端"(VPN 服务器);
+VPN 服务器内核凭 conntrack 记忆把目的地址翻译回 <code>10.0.0.2</code>,路由表把它赶进 TUN,
+VPN 进程重新封装后发还给你。企业内网场景可能不做 NAT:内网路由器都认得
+<code>10.0.0.0/24</code> 该往 VPN 服务器送,此时源 IP 全程保留,客户端在隧道内有自己的身份 IP。
+</div>
+</div>
+
+<!-- ==================== 对照 ==================== -->
+<h2>两种机制的拓扑对照</h2>
+<div class="card">
+<div class="mermaid">
+flowchart LR
+    subgraph Proxy ["代理:连接被腰斩成两段(应用层中继)"]
+        direction LR
+        A1["你的应用"] -->|"TCP 连接 ①<br/>(应用 ↔ 代理)"| P1["代理进程<br/>(两段的端点)"]
+        P1 -->|"TCP 连接 ②<br/>(代理 ↔ 目标)"| S1["目标服务器<br/>(TCP对端=代理)"]
+    end
+</div>
+<div class="mermaid">
+flowchart LR
+    subgraph VPN ["VPN:端到端一条连接,隧道对 TCP 透明(三层路由)"]
+        direction LR
+        A2["你的应用"] --- K1["你的内核<br/>(TUN + 路由)"]
+        K1 ==>|"加密隧道:<br/>原始包作为载荷"| K2["VPN服务器内核<br/>(解封装 + NAT + 路由)"]
+        K2 --> S2["目标服务器<br/>(TCP对端=你,经NAT显示为VPN)"]
+    end
+</div>
+</div>
+
+<h2>总账</h2>
+<div class="card">
+<table class="cmp">
+  <tr><th></th><th>代理</th><th>VPN</th></tr>
+  <tr><td>角色</td><td>应用层端点(终结 + 中继)</td><td>三层路由器(封装 + 路由)</td></tr>
+  <tr><td>"原始报文"的命运</td><td class="key">从未存在过</td><td>作为整体穿越隧道,原样保留</td></tr>
+  <tr><td>谁决定报文去向</td><td>应用自己(读配置后 connect 到代理)</td><td>内核路由表(应用无感知)</td></tr>
+  <tr><td>网络层报文是否被改写</td><td>没有;第二段的头是全新生成的</td><td>隧道不改写;NAT 仅翻译源地址</td></tr>
+  <tr><td>传输层连接</td><td>腰斩成两段,各自独立握手/重传</td><td>端到端一条,隧道透明</td></tr>
+  <tr><td>目标服务器的 TCP 对端</td><td>代理自己</td><td>你(经 NAT 显示为 VPN 的 IP)</td></tr>
+  <tr><td>不配合的程序</td><td class="key">绕过代理、流量泄露</td><td>照样被 TUN 接管</td></tr>
+  <tr><td>DNS 解析位置</td><td>可交给代理(域名写在应用层消息里)</td><td>通常由本机/隧道内解析</td></tr>
+</table>
+</div>
+
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    themeVariables: {
+      primaryColor: "#eef2ff", primaryTextColor: "#1e293b",
+      primaryBorderColor: "#7c3aed", lineColor: "#64748b",
+      fontFamily: "Segoe UI, Microsoft YaHei, sans-serif", fontSize: "14px"
+    }
+  });
+</script>
+</body>
+</html>

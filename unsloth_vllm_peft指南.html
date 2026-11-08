@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>unsloth、vLLM 与 HF+PEFT 微调对照指南</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --panel2:#273449; --border:#334155;
+    --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#a78bfa;
+    --green:#34d399; --amber:#fbbf24; --red:#f87171;
+    --code:#0b1120; --mono:"Cascadia Code","Consolas",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.7}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 80px}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:32px}
+  h1{font-size:1.9em;margin:0 0 8px}
+  h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  header p{color:var(--muted);margin:0;font-size:.98em}
+  .tagline span{display:inline-block;background:var(--panel2);border:1px solid var(--border);
+    border-radius:20px;padding:2px 12px;font-size:.8em;margin:8px 6px 0 0;color:var(--muted)}
+  h2{font-size:1.35em;margin:44px 0 14px;padding-left:14px;border-left:4px solid var(--accent)}
+  h3{font-size:1.08em;color:var(--accent2)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:20px 22px;margin:16px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  code{font-family:var(--mono);background:var(--panel2);padding:2px 6px;border-radius:6px;font-size:.9em}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:12px;
+    padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:.88em;line-height:1.6}
+  pre .cm{color:#64748b}
+  pre .kw{color:var(--accent)}
+  pre .st{color:var(--green)}
+  pre .fn{color:var(--accent2)}
+  pre .nu{color:var(--amber)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92em}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  tr:nth-child(even) td{background:#222d42}
+  .pill{display:inline-block;border-radius:6px;padding:1px 9px;font-size:.82em;font-weight:600}
+  .pill.train{background:#0b3b31;color:var(--green)}
+  .pill.infer{background:#17304a;color:var(--accent)}
+  .badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:.78em}
+  .b-hf{background:var(--amber);color:#0f172a}
+  .b-p{background:var(--accent);color:#0f172a}
+  .b-un{background:var(--accent2);color:#0f172a}
+  .tip{border-left:4px solid var(--green);background:#0b2b22;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+  .note{border-left:4px solid var(--amber);background:#2b240b;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+  .ele{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:10px 0;font-size:.93em}
+  .ele b{color:var(--accent);font-family:var(--mono);font-weight:600}
+  ul{padding-left:20px}
+  li{margin:5px 0}
+  .flow{background:var(--code);border:1px solid var(--border);border-radius:12px;
+    padding:14px 16px;font-family:var(--mono);font-size:.86em;margin:14px 0}
+  .arrow{color:var(--accent)}
+  hr{border:0;border-top:1px solid var(--border);margin:36px 0}
+  .toc{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px 22px}
+  .toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
+  @media(min-width:1081px){.toc{display:none}}
+  html{scroll-behavior:smooth}
+
+  /* ===== 左侧目录栏 ===== */
+  body{padding-left:232px}
+  .sidebar{position:fixed;top:0;left:0;width:232px;height:100vh;z-index:10;
+    background:var(--panel);border-right:1px solid var(--border);
+    padding:26px 0;overflow-y:auto}
+  .sidebar .logo{color:var(--text);font-weight:700;font-size:.95em;
+    padding:0 22px 14px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  .sidebar .logo small{display:block;color:var(--muted);font-weight:400;font-size:.8em;margin-top:2px}
+  .sidebar .logo .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sidebar a{display:block;color:var(--muted);text-decoration:none;
+    padding:7px 22px;font-size:.88em;border-left:3px solid transparent;transition:all .15s}
+  .sidebar a:hover{color:var(--text);background:var(--panel2)}
+  .sidebar a.active{color:var(--accent);border-left-color:var(--accent);background:var(--panel2)}
+  @media(max-width:1080px){
+    body{padding-left:0}
+    .sidebar{display:none}
+  }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo"><span class="grad">unsloth · vLLM · PEFT</span><small>微调对照指南</small></div>
+  <a href="#s1">1. unsloth 是什么</a>
+  <a href="#s2">2. vLLM 是什么</a>
+  <a href="#s3">3. 二者的关系</a>
+  <a href="#s4">4. 为什么训练快 vs 推理快</a>
+  <a href="#s5">5. 纯 HF + PEFT 微调</a>
+  <a href="#s6">6. 逐行对照</a>
+  <a href="#s7">7. 多模态场景（Qwen-VL）</a>
+  <a href="#s8">8. 一句话总结</a>
+</aside>
+
+<div class="wrap">
+
+<header>
+  <h1><span class="grad">unsloth · vLLM · HF+PEFT</span> 微调对照指南</h1>
+  <p>三者的定位、关系，以及「不用 unsloth、纯用 HuggingFace + PEFT」的替代方案。</p>
+  <div class="tagline">
+    <span>LLM 微调</span><span>推理引擎</span><span>Qwen</span><span>LoRA / QLoRA</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <strong>目录</strong>
+  <a href="#s1">1. unsloth 是什么</a>
+  <a href="#s2">2. vLLM 是什么</a>
+  <a href="#s3">3. 二者的关系（一张表看懂）</a>
+  <a href="#s4">4. 为什么快的地方不同：训练 vs 推理的工作负载</a>
+  <a href="#s5">5. 不用 unsloth：纯 HF + PEFT 微调（完整代码）</a>
+  <a href="#s6">6. unsloth 版 ↔ HF+PEFT 版 逐行对照</a>
+  <a href="#s7">7. 多模态场景的特殊说明（Qwen-VL）</a>
+  <a href="#s8">8. 一句话总结</a>
+</nav>
+
+<!-- ============ 1 ============ -->
+<h2 id="s1">1. unsloth 是什么</h2>
+<div class="card">
+  <p><b>unsloth</b> 是一个专门<b>加速大模型微调（训练）</b>的开源库。它的卖点不是「功能」，而是「<b>快 + 省显存</b>」。</p>
+
+  <h3>它解决了什么</h3>
+  <ul>
+    <li><b class="pill train">最快 2-5 倍</b> 训练速度提升</li>
+    <li><b class="pill train">省约 70%</b> 显存占用（可下放到消费级显卡微调 LLaMA/Qwen 等 7B~13B）</li>
+    <li><b>4bit / 8bit 量化（QLoRA）</b>开箱即用</li>
+  </ul>
+
+  <h3>三大核心手段</h3>
+  <ul>
+    <li><b>TRITON 手写优化算子</b>：重新实现 LoRA 底层矩阵运算，砍掉浪费的计算。</li>
+    <li><b>更省显存的前/反向传播</b>：复用中间结果，压低峰值显存。</li>
+    <li><b>无缝结合 QLoRA</b>：把模型压成 4bit，让小卡也能微调大模型。</li>
+  </ul>
+
+  <div class="note"><b>注意：</b>unsloth 不是 DeepSpeed / 分布式多卡框架，它主要在<u>单卡优化</u>上做文章。超大模型多卡训练时，还会额外配 DeepSpeed。</div>
+</div>
+
+<!-- ============ 2 ============ -->
+<h2 id="s2">2. vLLM 是什么</h2>
+<div class="card">
+  <p><b>vLLM</b> 是一个<b class="pill infer">纯推理引擎</b>，只做<b>生成/推理</b>，不做训练。它追求<b>高吞吐、低显存</b>，常用于生产部署。</p>
+  <ul>
+    <li><b>Continuous batching（连续批处理）</b>：边生成边插入新请求，吞吐更高。</li>
+    <li><b>PagedAttention</b>：像操作系统分页一样管理 KV Cache，显存不浪费。</li>
+  </ul>
+  <p>一句话：负责「模型进来 → 输出出去」跑得快又省内存。</p>
+</div>
+
+<!-- ============ 3 ============ -->
+<h2 id="s3">3. 二者的关系</h2>
+<div class="card">
+  <p>很多初学者以为「vLLM 管推理、unsloth 管训练」，<b>大致方向对，但有一处修正</b>：</p>
+  <div class="flow">
+    微调阶段（unsloth 自己） ──<span class="arrow">──▶</span> 推理验证阶段（借用 vLLM）
+  </div>
+  <ul>
+    <li><b>训练时</b>：unsloth 用<b>自己的优化算子</b>做 LoRA/GRPO 训练，此时 vLLM 基本闲置，只预占一块显存当引擎。</li>
+    <li><b>推理时</b>：<code>fast_inference=True</code> 让 unsloth 在内部起一个 <b>vLLM 引擎</b>当推理后端，<code>fast_generate</code> 无缝对接。</li>
+  </ul>
+
+  <div class="grid">
+    <div><b>常用路径一（生产）</b><br>训练完 → <code>model.inference(model)</code> 转原生权重 → 用 vLLM / llama.cpp 独立部署。</div>
+    <div><b>常用路径二（就地验证）</b><br>训练完 → <code>fast_inference=True</code> 直接调 <code>fast_generate</code> 快速验证效果。</div>
+  </div>
+
+  <div class="note"><b>什么是「转原生权重」？</b>训练结束时的模型不是完整模型：基座权重被冻结且可能压成 4bit，LoRA 只是挂在外面的小补丁（几十 MB 的 <code>adapter_model.safetensors</code>）——这是 unsloth/PEFT 的训练态格式，vLLM / llama.cpp 读不了。「转原生」就是把它还原成标准完整模型，分三步：
+    <ul>
+      <li><b>合并（merge）</b>：把 LoRA 的增量数学上加回基座（<code>W = W₀ + B·A</code>），从此不再有「补丁」，就是一套普普通通的完整权重。</li>
+      <li><b>反量化/升精度</b>：把 4bit 权重解压回标准的 fp16 / bf16。</li>
+      <li><b>按标准格式落盘</b>：存成和官方 Qwen 发布包一模一样的目录结构（<code>config.json</code> + <code>*.safetensors</code> + tokenizer 文件）。</li>
+    </ul>
+    转完之后，vLLM 才能 <code>vllm serve</code> 直接加载，llama.cpp 也能再转 GGUF 使用。
+  </div>
+
+  <table>
+    <tr><th></th><th><span class="badge b-un">unsloth</span></th><th><span class="badge b-hf">vLLM</span></th></tr>
+    <tr><td><b>角色</b></td><td>训练加速库（自带推理能力）</td><td>纯推理引擎</td></tr>
+    <tr><td><b>主要战场</b></td><td>微调/训练</td><td>推理/生成/部署</td></tr>
+    <tr><td><b>关键手段</b></td><td>TRITON 算子、省显存前反传</td><td>Continuous batching、PagedAttention</td></tr>
+    <tr><td><b>是否被 unsloth 依赖</b></td><td>—</td><td>仅在 <code>fast_inference=True</code> 时被借用</td></tr>
+    <tr><td><b>一句话</b></td><td>让「训练快」</td><td>让「推理快」</td></tr>
+  </table>
+
+  <div class="tip"><b>口诀：</b>两者独立，是「训练快」+「推理快」两条腿。unsloth 并不是基于 vLLM 微调，而是<u>微调用自己优化，推理时把 vLLM 当高吞吐后端</u>。</div>
+</div>
+
+<!-- ============ 4 ============ -->
+<h2 id="s4">4. 为什么快的地方不同：训练 vs 推理的工作负载</h2>
+<div class="card">
+  <p>第 3 节只说了「一个训练快、一个推理快」，但没解释<b>为什么快的地方不同</b>——根源在于训练和推理的工作负载完全不一样。</p>
+
+  <h3>4.1 训练和推理是两种不同的计算</h3>
+  <table>
+    <tr><th></th><th>训练（微调）</th><th>推理（生成）</th></tr>
+    <tr><td>前向传播</td><td>✅ 要</td><td>✅ 要</td></tr>
+    <tr><td><b>反向传播（算梯度）</b></td><td>✅ 要（最重的部分）</td><td>❌ 不要</td></tr>
+    <tr><td><b>优化器更新权重</b></td><td>✅ 要</td><td>❌ 不要</td></tr>
+    <tr><td>逐 token 循环生成</td><td>❌ 一次处理整个序列</td><td>✅ 一个 token 一个 token 蹦</td></tr>
+    <tr><td>典型场景</td><td>单任务、吃满一张卡</td><td>同时服务几十上百个请求</td></tr>
+  </table>
+
+  <h3>4.2 unsloth 为什么快：优化「反向传播」这条链路</h3>
+  <p>训练的瓶颈是：前向算一遍 → <b>反向再算一遍梯度</b> → 优化器更新。反向传播的计算量约是前向的 2 倍，而且要保存大量中间激活值，显存经常爆。unsloth 的三板斧全是冲着这条链路去的：</p>
+  <ul>
+    <li><b>TRITON 手写算子</b>——把 LoRA 的矩阵乘等底层运算重写，减少冗余读写。反向传播也要经过这些算子，所以省的是「每一步都省」。</li>
+    <li><b>复用中间结果</b>——前向算完的东西不扔，反向直接用，既省显存又省重复计算。</li>
+    <li><b>QLoRA（4bit）</b>——冻结的大模型权重压成 4bit 存，只有小 LoRA 参数参与梯度计算。</li>
+  </ul>
+  <div class="note"><b>关键点：</b>这些优化都依赖「有反向传播、能精确控显存」这个训练特有场景。而且训练时通常一次只跑一个任务，把单条链路榨干就够了。</div>
+
+  <h3>4.3 vLLM 为什么快：优化「并发调度」这件事</h3>
+  <p>推理没有反向传播，计算本身不重，它的瓶颈在别处：</p>
+  <ul>
+    <li><b>解码是显存带宽瓶颈</b>——每生成一个 token，都要把整个模型权重读一遍。batch=1 时 GPU 算力大量闲置（权重读完了，但只算了一个人的一份）。</li>
+    <li><b>所以核心手段是「同时服务更多人」</b>：
+      <ul>
+        <li><b>Continuous batching</b>：不等一整批生成完，谁结束就立刻塞新请求进来，GPU 始终吃饱 → 吞吐量暴涨。</li>
+        <li><b>PagedAttention</b>：每个请求的 KV Cache 长短不一，传统方式按最长预留显存浪费严重；vLLM 像操作系统分页内存一样按需分配碎片。</li>
+      </ul>
+    </li>
+  </ul>
+  <div class="note"><b>关键点：</b>vLLM 的优化是<u>调度和内存管理层面的</u>，针对「多请求、流式、KV Cache」这种服务场景——这些在训练里根本不存在。</div>
+
+  <h3>4.4 一张图总结</h3>
+  <div class="flow">
+    训练链路:  前向 → 反向 → 优化器          <span class="arrow">← unsloth 在这条路上做算子级优化</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(单任务，重计算重显存)<br>
+    <br>
+    推理链路:  请求队列 → 批处理调度 → 逐token生成 → KV Cache管理<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="arrow">← vLLM 在这条路上做调度级优化</span>
+  </div>
+
+  <div class="tip"><b>呼应第 3 节：</b>这也解释了 GRPO 训练中 unsloth 可以<b>借用</b> vLLM 来生成采样文本（强化学习需要模型自己生成 rollout），因为「生成」这部分恰好是 vLLM 的主场——但梯度更新仍然走 unsloth 自己的算子。两者不是竞争关系，而是各管一段流水线。</div>
+</div>
+
+<!-- ============ 5 ============ -->
+<h2 id="s5">5. 不用 unsloth：纯 HF + PEFT 微调</h2>
+<div class="card">
+  <p>「HF + PEFT」是标准基线：<span class="badge b-hf">Transformers</span> 负责加载模型与训练循环，<span class="badge b-p">PEFT</span> 负责把完整权重换成可训练的 LoRA 小参数集。这样<u>完全不需要 unsloth</u>。</p>
+
+  <h3>完整可运行示例（文本 SFT）</h3>
+<pre><code>import torch
+<span class="kw">from</span> transformers <span class="kw">import</span> (
+    AutoTokenizer, AutoModelForCausalLM, TrainingArguments,
+    Trainer, DataCollatorForLanguageModeling,
+)
+<span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model
+<span class="kw">from</span> datasets <span class="kw">import</span> load_dataset
+
+<span class="cm"># 1. 加载 tokenizer + base 模型</span>
+tokenizer = AutoTokenizer.from_pretrained(<span class="st">"Qwen/Qwen2.5-7B-Instruct"</span>)
+model = AutoModelForCausalLM.from_pretrained(
+    <span class="st">"Qwen/Qwen2.5-7B-Instruct"</span>,
+    torch_dtype=torch.bfloat16,
+    device_map=<span class="st">"auto"</span>,
+)
+
+<span class="cm"># 2. 一键切成 LoRA 版本（冻结原参数，只训小参数量）</span>
+lora_config = LoraConfig(
+    r=<span class="nu">16</span>,
+    lora_alpha=<span class="nu">32</span>,
+    target_modules=[<span class="st">"q_proj"</span>, <span class="st">"k_proj"</span>, <span class="st">"v_proj"</span>, <span class="st">"o_proj"</span>,
+                    <span class="st">"gate_proj"</span>, <span class="st">"up_proj"</span>, <span class="st">"down_proj"</span>],
+    lora_dropout=<span class="nu">0.05</span>,
+    bias=<span class="st">"none"</span>,
+    task_type=<span class="st">"CAUSAL_LM"</span>,
+)
+model = get_peft_model(model, lora_config)
+
+<span class="cm"># 3. 构造并格式化数据集</span>
+dataset = load_dataset(<span class="st">"json"</span>, data_files=<span class="st">"train.jsonl"</span>)
+
+<span class="kw">def</span> <span class="fn">format_fn</span>(examples):
+    texts = [t + tokenizer.eos_token <span class="kw">for</span> t <span class="kw">in</span> examples[<span class="st">"text"</span>]]
+    <span class="kw">return</span> tokenizer(texts, padding=<span class="st">"max_length"</span>,
+                     truncation=<span class="kw">True</span>, max_length=<span class="nu">512</span>)
+
+dataset = dataset.map(format_fn, batched=<span class="kw">True</span>)
+
+<span class="cm"># 4. 用普通 Trainer 训练</span>
+training_args = TrainingArguments(
+    output_dir=<span class="st">"./lora_out"</span>,
+    per_device_train_batch_size=<span class="nu">1</span>,
+    gradient_accumulation_steps=<span class="nu">8</span>,
+    learning_rate=<span class="nu">2e-4</span>,
+    num_train_epochs=<span class="nu">3</span>,
+    bf16=<span class="kw">True</span>,
+    logging_steps=<span class="nu">10</span>,
+    save_strategy=<span class="st">"epoch"</span>,
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=dataset[<span class="st">"train"</span>],
+    data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=<span class="kw">False</span>),
+)
+trainer.train()
+
+<span class="cm"># 5. 保存 LoRA 适配器</span>
+model.save_pretrained(<span class="st">"./lora_final"</span>)
+tokenizer.save_pretrained(<span class="st">"./lora_final"</span>)
+</code></pre>
+
+  <h3>流程小结</h3>
+  <ul>
+    <li><span class="badge b-hf">Transformers</span>：<code>AutoTokenizer</code> + <code>AutoModelForCausalLM</code> 加载模型。</li>
+    <li><span class="badge b-p">PEFT</span>：<code>LoraConfig</code> + <code>get_peft_model</code> 套 LoRA。</li>
+    <li><span class="badge b-hf">Trainer</span>：跑训练循环，自动处理梯度、checkpoint。</li>
+  </ul>
+  <div class="note"><b>提示：</b>若显存不够，可把 <code>AutoModelForCausalLM.from_pretrained</code> 此行配对 <code>load_in_4bit=True</code>（from <code>transformers</code> 原生、或 <code>bitsandbytes</code>），实现 QLoRA。</div>
+</div>
+
+<!-- ============ 6 ============ -->
+<h2 id="s6">6. unsloth 版 ↔ HF+PEFT 版 逐行对照</h2>
+<div class="card">
+  <p>你那份 Qwen GRPO 脚本里的几行，其实就是上面 HF 流程的「换皮版」：</p>
+  <table>
+    <tr><th>unsloth 版</th><th>HF + PEFT 版</th><th>说明</th></tr>
+    <tr><td><code>FastLanguageModel</code></td><td><code>AutoModelForCausalLM</code></td><td>unsloth 顺带打包了 4bit 量化、vLLM 等</td></tr>
+    <tr><td><code>FastLanguageModel.from_pretrained(...)</code></td><td><code>AutoModelForCausalLM.from_pretrained(...)</code></td><td>加载基座模型</td></tr>
+    <tr><td><code>FastLanguageModel.get_peft_model(...)</code></td><td><code>get_peft_model(...)</code> + <code>LoraConfig</code></td><td>加 LoRA</td></tr>
+    <tr><td><code>GRPOTrainer</code></td><td><code>Trainer</code> / <code>SFTTrainer</code></td><td>训练循环（GRPO 是强化学习专用 Trainer）</td></tr>
+  </table>
+
+  <div class="tip"><b>结论：</b>概念没变——HF 管加载和训练循环，PEFT 管 LoRA。unsloth 只是同一套骨架的「加速版」，把底层算子换成省显存的手写优化版，其余流程照旧。</div>
+</div>
+
+<!-- ============ 7 ============ -->
+<h2 id="s7">7. 多模态场景的特殊说明（Qwen-VL）</h2>
+<div class="card">
+  <p>你那份 <code>qwen_vl_car_insurance_train.py</code> 之所以<b>不能用 <code>fast_generate</code></b>，而只能用 <code>model.generate</code>，原因有二：</p>
+  <ol>
+    <li><b>加载时没开 <code>fast_inference=True</code></b> —— 它用的是 <code>FastVisionModel.from_pretrained(...)</code>，未启用 vLLM 后端，所以走 HF 原生 <code>generate</code>。</li>
+    <li><b>多模态不适合 vLLM fast 接口</b> —— 图片必须先由视觉编码器算成向量、再按位置拼进序列，vLLM 对「输入里混图片」的支持不完整，unsloth 对视觉模型干脆退回 HF 原生接口。</li>
+  </ol>
+
+  <p>所以多模态手动准备输入：</p>
+<pre><code>inputs = tokenizer(test_image, input_text, add_special_tokens=<span class="kw">False</span>,
+                   return_tensors=<span class="st">"pt"</span>).to(<span class="st">"cuda"</span>)
+_ = model.generate(**inputs, streamer=text_streamer, max_new_tokens=<span class="nu">128</span>,
+                   use_cache=<span class="kw">True</span>, temperature=<span class="nu">1.5</span>, min_p=<span class="nu">0.1</span>)
+</code></pre>
+  <p>而纯文本 + <code>fast_inference=True</code> 时，tokenize 被 vLLM 内部包办，直接给字符串即可：</p>
+<pre><code>output = model.fast_generate(
+    text,                          <span class="cm"># 裸字符串，内部自动 tokenize</span>
+    sampling_params=sampling_params,
+    lora_request=model.load_lora(<span class="st">"grpo_saved_lora"</span>),
+)[<span class="nu">0</span>].outputs[<span class="nu">0</span>].text
+</code></pre>
+</div>
+
+<!-- ============ 8 ============ -->
+<h2 id="s8">8. 一句话总结</h2>
+<div class="card">
+  <ul>
+    <li><b>vLLM</b> = <u>推理引擎</u>；<b>unsloth</b> = <u>训练加速库</u>。</li>
+    <li>unsloth 微调用<b>自己的算子</b>，推理时把 <b>vLLM</b> 当高吞吐后端（<code>fast_inference=True</code>）。</li>
+    <li>不依赖 unsloth 也能微调：<b>Transformers 加载 + PEFT 套 LoRA + Trainer 训练</b>，就是上文的 HF+PEFT 基线。</li>
+    <li>多模态（视觉）模型走 <code>model.generate</code> 手动 tokenize；纯文本可走 vLLM 的 <code>fast_generate</code>。</li>
+  </ul>
+</div>
+
+<hr>
+<p style="color:var(--muted);font-size:.85em;text-align:center">整理自对话 · Qwen4.5 系列微调课程笔记 · 2026-10</p>
+
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.sidebar a'));
+  var secs = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function onScroll(){
+    var y = window.scrollY + 130, cur = 0;
+    secs.forEach(function(s, i){ if (s && s.offsetTop <= y) cur = i; });
+    links.forEach(function(a, i){ a.classList.toggle('active', i === cur); });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+</body>
+</html>

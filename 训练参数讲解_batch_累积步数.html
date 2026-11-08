@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>batch_size / gradient_accumulation / steps 参数详解</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #181b24; --panel2: #1f2330;
+    --text: #e6e8ee; --muted: #9aa3b2; --line: #2c3140;
+    --accent: #5b9dff; --green: #4ade80; --amber: #fbbf24; --red: #f87171;
+    --purple: #c084fc; --cyan: #22d3ee;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    line-height: 1.75; padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  h2 {
+    font-size: 19px; margin: 36px 0 14px; padding-left: 12px;
+    border-left: 4px solid var(--accent);
+  }
+  code {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 0.92em;
+    background: var(--panel2); padding: 2px 7px; border-radius: 5px;
+    color: var(--cyan);
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; margin: 12px 0;
+  }
+  .formula {
+    font-family: Consolas, monospace; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px; margin: 12px 0; font-size: 15px;
+    color: var(--amber); text-align: center;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; }
+  th { background: var(--panel2); color: var(--muted); font-weight: 600; }
+  td code { white-space: nowrap; }
+
+  /* 三个概念卡 */
+  .cards3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .t { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+  .card .d { font-size: 13px; color: var(--muted); line-height: 1.7; }
+  .card .f { font-family: Consolas, monospace; font-size: 13px; color: var(--amber); margin-top: 8px; }
+  .c-batch { border-top: 3px solid var(--accent); }
+  .c-accum { border-top: 3px solid var(--purple); }
+  .c-step  { border-top: 3px solid var(--green); }
+
+  /* 时间线图 */
+  .timeline { font-family: Consolas, monospace; font-size: 13px; overflow-x: auto; padding: 10px 0; }
+  .tl-row { display: flex; align-items: center; gap: 6px; margin: 7px 0; white-space: nowrap; }
+  .tl-label { width: 150px; color: var(--muted); flex-shrink: 0; font-size: 12.5px; }
+  .chip {
+    padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel2); flex-shrink: 0;
+  }
+  .chip.mb  { border-color: var(--accent); color: var(--accent); }
+  .chip.acc { border-color: var(--purple); color: var(--purple); }
+  .chip.upd { border-color: var(--green); color: var(--green); background: rgba(74,222,128,.08); }
+  .arrow { color: var(--muted); flex-shrink: 0; }
+  .tl-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  /* 模拟器 */
+  .sim { display: grid; grid-template-columns: 220px 1fr; gap: 20px; align-items: start; }
+  .sim-controls label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
+  .sim-controls input[type=range] { width: 100%; accent-color: var(--accent); }
+  .sim-readout { font-family: Consolas, monospace; font-size: 13px; margin-top: 16px; background: var(--panel2); border-radius: 8px; padding: 10px 12px; border: 1px solid var(--line); }
+  .sim-readout div { display: flex; justify-content: space-between; padding: 2px 0; }
+  .sim-readout .hl { color: var(--amber); }
+  .sim-canvas-box { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  #simCanvas { width: 100%; display: block; }
+  .btn {
+    margin-top: 14px; width: 100%; padding: 8px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--accent); background: transparent; color: var(--accent);
+    font-size: 13px; font-family: inherit;
+  }
+  .btn:hover { background: rgba(91,157,255,.12); }
+
+  /* 易错点 */
+  .pitfall { border-left: 4px solid var(--red); background: var(--panel); border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 12px 0; }
+  .pitfall .pt { font-weight: 700; color: var(--red); font-size: 14.5px; }
+  .pitfall .pd { font-size: 13.5px; color: var(--text); margin-top: 5px; }
+  .pitfall .fix { color: var(--green); font-size: 13px; margin-top: 4px; }
+  .num { display: inline-block; width: 22px; height: 22px; border-radius: 6px; background: var(--red); color: #fff; text-align: center; line-height: 22px; font-size: 12px; margin-right: 8px; }
+
+  .ok { color: var(--green); }
+  .warn { color: var(--amber); }
+  .bad { color: var(--red); }
+  .kbd { color: var(--purple); font-weight: 600; }
+
+  /* 对比示例表 */
+  .ref { font-family: Consolas, monospace; font-size: 13px; color: var(--text); }
+  .ref .ln { color: var(--muted); display: inline-block; width: 26px; text-align: right; margin-right: 10px; }
+  .ref .cm { color: #6b7280; }
+  .ref .hl2 { color: var(--amber); }
+
+  footer { margin-top: 44px; color: var(--muted); font-size: 12px; text-align: center; border-top: 1px solid var(--line); padding-top: 18px; }
+  @media (max-width: 700px) { .cards3 { grid-template-columns: 1fr; } .sim { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>batch_size / gradient_accumulation / max_steps</h1>
+<div class="subtitle">基于《47-LLM模型蒸馏与微调实操》两个训练脚本的参数图解 · VLM脚本 (2×4) vs GRPO脚本 (1×1)</div>
+
+<!-- ============ 三个概念 ============ -->
+<h2>三个参数，三个不同的东西</h2>
+
+<div class="cards3">
+  <div class="card c-batch">
+    <div class="t">per_device_train_batch_size</div>
+    <div class="d"><b>一次塞进 GPU 的样本数</b>。受显存硬约束——装不下就 OOM。它只管"每一口吃多少"，不管消化节奏。</div>
+    <div class="f">俗称 micro-batch</div>
+  </div>
+  <div class="card c-accum">
+    <div class="t">gradient_accumulation_steps</div>
+    <div class="d"><b>攒几次梯度才更新一次权重</b>。前 N-1 次反向只往 .grad 里累加（<code>backward()</code> 对梯度是 += 不是 =），参数纹丝不动；第 N 次才 step。</div>
+    <div class="f">用显存换大batch</div>
+  </div>
+  <div class="card c-step">
+    <div class="t">max_steps / num_train_epochs</div>
+    <div class="d"><b>训练何时结束</b>。<code>max_steps</code> 直接数"参数更新次数"；<code>num_train_epochs</code> 数"数据扫几遍"。二者给出其一步数优先。</div>
+    <div class="f">step = optimizer.step() 次数</div>
+  </div>
+</div>
+
+<div class="formula">
+  等效 batch size = per_device_train_batch_size × gradient_accumulation_steps × GPU卡数<br>
+  <span style="color:var(--muted); font-size:13px;">VLM: 2 × 4 × 1 = 8　|　GRPO: 1 × 1 × 1 = 1</span>
+</div>
+
+<!-- ============ 时间线 ============ -->
+<h2>一步（step）内部发生了什么 —— VLM 脚本 (2×4)</h2>
+
+<div class="panel">
+<div class="timeline" id="tlVLM"></div>
+</div>
+
+<p style="font-size:13.5px; color:var(--muted);">中间 3 次 backward 期间<b style="color:var(--text)">参数从未改变</b>，只有 .grad 里的数字在涨——这就是"梯度累积"。等价性成立的前提就是权重不变：拆开算的 4 份小梯度加起来除以 4，数学上等于 8 个样本一起算的大 batch 梯度。</p>
+
+<!-- ============ 模拟器 ============ -->
+<h2>交互模拟器：调参看一步怎么走</h2>
+
+<div class="panel">
+<div class="sim">
+  <div class="sim-controls">
+    <label>per_device_train_batch_size: <b id="vBatch">2</b></label>
+    <input type="range" id="batch" min="1" max="8" value="2">
+    <label>gradient_accumulation_steps: <b id="vAccum">4</b></label>
+    <input type="range" id="accum" min="1" max="8" value="4">
+    <label>max_steps: <b id="vSteps">30</b></label>
+    <input type="range" id="steps" min="10" max="250" value="30">
+    <label>数据集大小 (样本数)</label>
+    <input type="range" id="data" min="10" max="8000" value="240" step="10">
+    <button class="btn" id="applyPreset">载入 GRPO 预设 (1×1, 250步, 7473样本)</button>
+    <div class="sim-readout">
+      <div><span>等效 batch</span><span class="hl" id="oEff">8</span></div>
+      <div><span>总样本吞吐 = 步数×等效</span><span id="oTotal">240</span></div>
+      <div><span>数据覆盖率</span><span id="oCov">100%</span></div>
+      <div><span>等效 epoch 数</span><span id="oEpoch">1.0</span></div>
+      <div><span>结束条件</span><span id="oEnd">—</span></div>
+    </div>
+    <div style="font-size:12px; color:var(--muted); margin-top:12px; line-height:2; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-family:Consolas,monospace;">
+      <div>等效 batch = batch_size × accumulation × 卡数</div>
+      <div>总样本吞吐 = max_steps × 等效 batch</div>
+      <div>数据覆盖率 = min( 总吞吐 ÷ 数据集大小 , 1 ) × 100%</div>
+      <div>等效 epoch = 总吞吐 ÷ 数据集大小</div>
+      <div style="color:var(--amber);">覆盖率 &lt; 1 的部分丢弃训练; epoch &gt; 1 = 重复扫数据</div>
+    </div>
+  </div>
+  <div class="sim-canvas-box">
+    <canvas id="simCanvas" width="620" height="240"></canvas>
+    <div class="tl-note">上排：样本被切成的 micro-batch（蓝色）；下排：梯度累积过程（紫色），绿色竖线 = optimizer.step() 权重更新时刻。图示前 2 个 step。</div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 为什么需要梯度累积 ============ -->
+<h2>为什么需要梯度累积？</h2>
+
+<div class="panel" style="font-size:14.5px;">
+  <p style="margin-bottom:10px;"><b style="color:var(--green);">是的——核心目的就是：显存装不下想要的 batch，又想要大 batch 的训练效果。</b></p>
+  <p style="margin-bottom:10px;">大 batch 梯度更稳定（样本多、噪声互相抵消），但一次性 forward 8 个样本，<b>8 份激活值（各层中间输出）必须同时在显存里</b>等反向传播用——7B 模型上很容易 OOM。而梯度这个东西<b>天生可加</b>（PyTorch 的 <code>backward()</code> 对 .grad 是累加），所以：</p>
+  <div class="formula" style="text-align:left; font-size:14px;">
+    一次吃不下 8 个 → 拆成 4 次 × 2 个，每次只占 <b>2 份激活值的显存</b><br>
+    梯度先攒着（参数不动）→ 攒够 4 份 → 求平均 → 更新一次<br>
+    <span style="color:var(--green);">效果 ≈ 真的一次吃 8 个，显存只花 1/4</span>
+  </div>
+  <p><b>代价</b>：4 次是<b>串行</b>的，一步耗时约 4 倍，没有任何加速——纯粹是"显存换 batch"。所以调整顺序永远是：先把 per_device 拉到显存上限，不够的部分再用累积补。</p>
+</div>
+
+<!-- ============ 两个脚本对照 ============ -->
+<h2>两个脚本对照</h2>
+
+<table>
+  <tr><th></th><th>VLM 微调 (SFT)</th><th>GRPO 强化学习</th></tr>
+  <tr><td><code>per_device_train_batch_size</code></td><td><span class="ok">2</span>（2张图一口）</td><td><span class="warn">1</span></td></tr>
+  <tr><td><code>gradient_accumulation_steps</code></td><td><span class="ok">4</span></td><td><span class="warn">1</span>（不累积，每批立即更新）</td></tr>
+  <tr><td>等效 batch</td><td><b>8</b></td><td><b>1</b>（×6 completions）</td></tr>
+  <tr><td><code>max_steps</code></td><td>30 → 消耗 240 样本</td><td>250 → 消耗 250 题（GSM8K 的 3.3%）</td></tr>
+  <tr><td>为何这样配</td><td>7B级VLM显存紧，2×4 用小口吃出大batch</td><td>GRPO 单步已含 6 条生成答案的信号；RL 要小步慢走（lr=5e-6）</td></tr>
+</table>
+
+<!-- ============ 易错点 ============ -->
+<h2>易错点清单</h2>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">1</span>"step = 一个 batch" —— 不一定</div>
+  <div class="pd">step 是<b>一次参数更新</b>。开了累积时，1 step = N 个 micro-batch。只有 <code>gradient_accumulation_steps=1</code> 时两者才重合。VLM 脚本 1 step = <b>4</b> 个 batch、8 个样本。</div>
+  <div class="fix">✓ 记公式：总样本吞吐 = max_steps × batch × 累积 × 卡数</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">2</span>设了 max_steps 就看不了 epoch —— 优先级陷阱</div>
+  <div class="pd">HF Trainer 中 <code>max_steps</code> <b>覆盖</b> <code>num_train_epochs</code>。VLM 脚本 30 步吃 240 样本，若数据集只有几十条，实际扫了几十遍也不报错、不提示。</div>
+  <div class="fix">✓ 想按数据遍数训练就删掉 max_steps 只留 num_train_epochs；两者并存时以 max_steps 为准</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">3</span>加大累积系数 ≠ 加速训练</div>
+  <div class="pd">累积是<b>串行</b>的：4 次 micro-batch 依次前向反向，一步时间≈4倍。它买到的是"等效大 batch 的稳定梯度"，不是吞吐量。GPU 本来就吃不饱时（batch=1），开累积纯变慢。</div>
+  <div class="fix">✓ 先把 per_device 拉到显存允许的极限，累积只用来补足剩余的等效 batch 需求</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">4</span>手动实现累积时忘了 loss ÷ N</div>
+  <div class="pd">大 batch 梯度 = N 份小梯度<b>平均</b>（不是求和）。backward 前不把 loss 除以 N，等效学习率放大 N 倍，训练发散。HF Trainer 自动做了缩放，自己写循环时最容易漏。</div>
+  <div class="fix">✓ 手写版：<code>loss = loss / accum_steps</code> 再 <code>loss.backward()</code></div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">5</span>把累积中间当检查点 / 中途改权重</div>
+  <div class="pd">累积期间参数必须<b>全程不变</b>。若在 micro-batch 之间偷偷更新权重（或 someone 调了 zero_grad），后几次梯度基于不同权重算出，加起来不再等于大 batch 梯度，训练数学上就错了。</div>
+  <div class="fix">✓ 累积期间不动权重、不清梯度、不 step；攒满 N 再一次完成 step+zero</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">6</span>GRPO 的 "batch=1" ≠ 信号量 1</div>
+  <div class="pd">GRPO 一步虽只吃 1 个 prompt，但每题采样 <code>num_generations=6</code> 条回答，组内 6 条比出相对优势——有效样本是 6 条完整生成。拿 SFT 的"batch 越大越好"直觉套 RL 会配错参数。</div>
+  <div class="fix">✓ RL 看的是每步的"探索量"（6条×千token推理链），不是批内题目数</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">7</span>logging_steps / save_steps 数的也是 step</div>
+  <div class="pd">横轴单位都是<b>优化步</b>不是 micro-batch。<code>save_steps=250, max_steps=250</code> 意味着训练<b>结束那一刻</b>才存一次检查点——中途崩了等于白训（GRPO 脚本就是这个配置，演示用没问题，正经训练别这么设）。</div>
+  <div class="fix">✓ save_steps 设为 max_steps 的 1/4~1/5，保证有中间检查点可回滚</div>
+</div>
+
+<div class="pitfall">
+  <div class="pt"><span class="num">8</span>多卡时等效 batch 忘乘卡数</div>
+  <div class="pd">每张卡各自吃 per_device 个样本，DDP 下等效 batch = per_device × 累积 × <b>卡数</b>。8卡各自 batch=2、累积=1，等效已是 16，再手调累积会翻倍放大。</div>
+  <div class="fix">✓ 换硬件（卡数变化）后重算等效 batch，再决定是否动累积系数</div>
+</div>
+
+<!-- ============ 速查 ============ -->
+<h2>一句话速查</h2>
+<div class="panel" style="font-size:14.5px;">
+  <p><b class="kbd">batch_size</b> = 每口吃多少（显存说了算）</p>
+  <p><b class="kbd">accumulation</b> = 攒几口才咽一次（小口拼大batch，串行不加速）</p>
+  <p><b class="kbd">step</b> = 咽下去的次数（参数真正变化的次数）</p>
+  <p><b class="kbd">max_steps</b> = 咽够这个数就收工（与收敛无关，纯预算）</p>
+</div>
+
+<footer>47-LLM模型蒸馏与微调实操 · 参数讲解页 · 交互模拟器可直接拖动调参</footer>
+</div>
+
+<script>
+// ---------- VLM 时间线（静态） ----------
+(function(){
+  var rows = [
+    {label:'micro-batch', items:[
+      ['A (2样本)', 'mb'], ['B (2样本)', 'mb'], ['C (2样本)', 'mb'], ['D (2样本)', 'mb']
+    ]},
+    {label:'.grad 累加', items:[
+      ['← g_A/4', 'acc'], ['← +g_B/4', 'acc'], ['← +g_C/4', 'acc'], ['← +g_D/4', 'acc']
+    ]},
+    {label:'参数更新', items:[
+      ['不动', ''], ['不动', ''], ['不动', ''], ['step() ✓', 'upd']
+    ]}
+  ];
+  var html = '';
+  rows.forEach(function(r){
+    html += '<div class="tl-row"><div class="tl-label">' + r.label + '</div>';
+    r.items.forEach(function(it, i){
+      if(i>0) html += '<span class="arrow">→</span>';
+      html += '<span class="chip ' + it[1] + '">' + it[0] + '</span>';
+    });
+    html += '</div>';
+  });
+  html += '<div class="tl-note">Step 1 结束（zero_grad），Step 2 重复以上流程 … 直到第 30 步收工</div>';
+  document.getElementById('tlVLM').innerHTML = html;
+})();
+
+// ---------- 模拟器 ----------
+var $ = function(id){ return document.getElementById(id); };
+var cfg = { batch:2, accum:4, steps:30, data:240 };
+
+function drawSim(){
+  var canvas = $('simCanvas');
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.parentElement.clientWidth - 24;
+  var H = 240;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  var mb = cfg.batch * cfg.accum;
+  var pad = 14, y1 = 92, y2 = 168;
+  var slotW = (W - 2*pad) / (cfg.accum * 2);   // 每行固定 2*accum 个槽位，与 batch 无关
+
+  // 上排: 样本块（灰）切成 micro-batch
+  for(var s=0; s<2; s++){         // 2 steps
+    for(var a=0; a<cfg.accum; a++){ // each acc
+      var x = pad + (s*cfg.accum + a) * slotW + 3;
+      var w = slotW - 6;
+      // micro-batch 框
+      var colors = ['#5b9dff','#7fb4ff','#a3c9ff','#c7deff'];
+      var per = cfg.batch; // 每个mb里的样本数（画成小格）
+      var perDraw = Math.min(per, 8);   // 视觉上限8格，再多画"+N"
+      var sw = (w - (perDraw-1)*2) / perDraw;
+      for(var i=0;i<perDraw;i++){
+        ctx.fillStyle = colors[Math.min(a,3)];
+        ctx.fillRect(x + i*(sw+2), y1-26, sw, 24);
+      }
+      if(per > perDraw){
+        ctx.fillStyle = '#fbbf24'; ctx.font='10px Consolas';
+        ctx.fillText('+' + (per - perDraw), x + w - 18, y1 - 10);
+      }
+      ctx.strokeStyle = 'rgba(91,157,255,.5)';
+      ctx.strokeRect(x, y1-28, w, 28);
+      ctx.fillStyle = '#9aa3b2'; ctx.font='10px Consolas';
+      ctx.fillText('mb'+(a+1), x + w/2 - 9, y1 - 32);
+    }
+  }
+  // 上排标题
+  ctx.fillStyle = '#e6e8ee'; ctx.font = '12px sans-serif';
+  ctx.fillText('样本流入：每 step 需 ' + mb + ' 个样本（'+cfg.accum+' 个 micro-batch × '+cfg.batch+'）', pad, 42);
+
+  // 下排: 梯度累积条
+  for(var s2=0; s2<2; s2++){
+    var gradFill = 0;
+    for(var a2=0; a2<cfg.accum; a2++){
+      var x2 = pad + (s2*cfg.accum + a2) * slotW + 3;
+      gradFill += 1/cfg.accum;
+      var w2 = slotW - 6;
+      // bar 背景
+      ctx.strokeStyle = '#2c3140';
+      ctx.strokeRect(x2, y2, w2, 26);
+      // 填充比例
+      var colors2 = ['#c084fc','#a86ff0','#8f5be0','#7750c8'];
+      ctx.fillStyle = 'rgba(192,132,252,'+(0.35+0.5*gradFill)+')';
+      ctx.fillRect(x2, y2, w2*gradFill, 26);
+      ctx.fillStyle = '#9aa3b2'; ctx.font='10px Consolas';
+      ctx.fillText('grad ' + Math.round(gradFill*100) + '%', x2 + 4, y2 + 17);
+      // 更新标记
+      if(a2 == cfg.accum-1){
+        ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x2 + w2 + 3, y2-4); ctx.lineTo(x2 + w2 + 3, y2+30); ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.fillStyle = '#4ade80';
+        ctx.fillText('step ' + (s2+1) + ' ✓', x2 + w2 - 30, y2 + 42);
+      }
+    }
+  }
+  ctx.fillStyle = '#e6e8ee'; ctx.font = '12px sans-serif';
+  ctx.fillText('.grad 累积：攒满 ' + cfg.accum + ' 份 → optimizer.step() 更新权重一次', pad, y2 - 12);
+
+  // 底部读数
+  var eff = cfg.batch * cfg.accum;
+  var totalN = cfg.steps * eff;
+  var cov = Math.min(totalN / cfg.data, 1);
+  var epochs = totalN / cfg.data;
+  ctx.fillStyle = '#fbbf24'; ctx.font = '13px Consolas';
+  ctx.fillText('等效batch=' + eff + '　总吞吐=' + totalN + '样本　覆盖率=' + (cov*100).toFixed(1) + '%　epoch=' + epochs.toFixed(2), pad, H - 10);
+}
+
+function updateReadout(){
+  var eff = cfg.batch * cfg.accum;
+  var totalN = cfg.steps * eff;
+  var cov = Math.min(totalN / cfg.data, 1);
+  var epochs = totalN / cfg.data;
+  $('vBatch').textContent = cfg.batch;
+  $('vAccum').textContent = cfg.accum;
+  $('vSteps').textContent = cfg.steps;
+  $('oEff').textContent = eff;
+  $('oTotal').textContent = totalN;
+  $('oCov').textContent = (cov*100).toFixed(1) + '%';
+  $('oCov').style.color = cov >= 0.999 ? '#4ade80' : (cov < 0.1 ? '#f87171' : '#fbbf24');
+  $('oEpoch').textContent = epochs.toFixed(2);
+  $('oEpoch').style.color = epochs > 20 ? '#f87171' : (epochs > 1 ? '#fbbf24' : '#e6e8ee');
+  var endTxt = totalN >= cfg.data ? 'max_steps 到点收工' : 'max_steps 到点收工（数据没扫完）';
+  $('oEnd').textContent = endTxt;
+}
+
+function refresh(){ updateReadout(); drawSim(); }
+
+$('batch').oninput = function(){ cfg.batch = +this.value; refresh(); };
+$('accum').oninput = function(){ cfg.accum = +this.value; refresh(); };
+$('steps').oninput = function(){ cfg.steps = +this.value; refresh(); };
+$('data').oninput  = function(){ cfg.data  = +this.value; refresh(); };
+$('applyPreset').onclick = function(){
+  cfg = { batch:1, accum:1, steps:250, data:7473 };
+  $('batch').value=1; $('accum').value=1; $('steps').value=250; $('data').value=7473;
+  refresh();
+};
+window.addEventListener('resize', drawSim);
+refresh();
+</script>
+</body>
+</html>

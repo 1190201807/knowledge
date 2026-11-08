@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>unsloth · vLLM · PEFT 易错点与自测题</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --panel2:#273449; --border:#334155;
+    --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#a78bfa;
+    --green:#34d399; --amber:#fbbf24; --red:#f87171;
+    --code:#0b1120; --mono:"Cascadia Code","Consolas",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.7}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 80px}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:32px}
+  h1{font-size:1.9em;margin:0 0 8px}
+  h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  header p{color:var(--muted);margin:0;font-size:.98em}
+  .tagline span{display:inline-block;background:var(--panel2);border:1px solid var(--border);
+    border-radius:20px;padding:2px 12px;font-size:.8em;margin:8px 6px 0 0;color:var(--muted)}
+  .tagline span.win{background:#0b3b31;color:var(--green);border-color:#166a54}
+  h2{font-size:1.35em;margin:44px 0 14px;padding-left:14px;border-left:4px solid var(--accent)}
+  h3{font-size:1.08em;color:var(--accent2)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:20px 22px;margin:16px 0}
+  code{font-family:var(--mono);background:var(--panel2);padding:2px 6px;border-radius:6px;font-size:.9em}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92em}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  tr:nth-child(even) td{background:#222d42}
+  .pill{display:inline-block;border-radius:6px;padding:1px 9px;font-size:.82em;font-weight:600}
+  .pill.ok{background:#0b3b31;color:var(--green)}
+  .tip{border-left:4px solid var(--green);background:#0b2b22;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+  .note{border-left:4px solid var(--amber);background:#2b240b;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}
+  ul,ol{padding-left:20px}
+  li{margin:5px 0}
+  .cat{color:var(--accent);font-weight:700}
+  .opts{list-style:none;padding-left:0;margin:12px 0}
+  .opts li{padding:8px 12px;border:1px solid var(--border);border-radius:10px;margin:8px 0;
+    background:var(--panel2)}
+  .opts b{color:var(--accent);font-family:var(--mono);margin-right:6px}
+  details{background:var(--code);border:1px solid var(--border);border-radius:12px;
+    padding:12px 18px;margin:12px 0}
+  summary{cursor:pointer;color:var(--accent);font-weight:700;user-select:none}
+  summary:hover{color:var(--accent2)}
+  details[open] summary{border-bottom:1px dashed var(--border);padding-bottom:8px;margin-bottom:8px}
+  .ans{color:var(--green);font-weight:700}
+  .anchor{background:var(--code);border:1px solid var(--border);border-radius:12px;
+    padding:14px 18px;font-family:var(--mono);font-size:.9em;margin:14px 0}
+  hr{border:0;border-top:1px solid var(--border);margin:36px 0}
+
+  /* ===== 左侧目录栏 ===== */
+  body{padding-left:232px}
+  .sidebar{position:fixed;top:0;left:0;width:232px;height:100vh;z-index:10;
+    background:var(--panel);border-right:1px solid var(--border);
+    padding:26px 0;overflow-y:auto}
+  .sidebar .logo{color:var(--text);font-weight:700;font-size:.95em;
+    padding:0 22px 14px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  .sidebar .logo small{display:block;color:var(--muted);font-weight:400;font-size:.8em;margin-top:2px}
+  .sidebar .logo .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sidebar a{display:block;color:var(--muted);text-decoration:none;
+    padding:7px 22px;font-size:.88em;border-left:3px solid transparent;transition:all .15s}
+  .sidebar a:hover{color:var(--text);background:var(--panel2)}
+  .sidebar a.active{color:var(--accent);border-left-color:var(--accent);background:var(--panel2)}
+  @media(max-width:1080px){
+    body{padding-left:0}
+    .sidebar{display:none}
+  }
+  html{scroll-behavior:smooth}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo"><span class="grad">易错点 · 自测题</span><small>unsloth / vLLM / PEFT</small></div>
+  <a href="#s1">1. 易错点速查</a>
+  <a href="#s2">2. 自测① unsloth 与 vLLM 的关系</a>
+  <a href="#s3">3. 自测② 训练产物（adapter）</a>
+  <a href="#s4">4. 自测③ 多模态推理</a>
+  <a href="#s5">5. 自测④ 纯 HF + PEFT 微调</a>
+  <a href="#s6">6. 自测⑤ 为什么快的地方不同</a>
+  <a href="#s7">7. 记忆锚点汇总</a>
+</aside>
+
+<div class="wrap">
+
+<header>
+  <h1><span class="grad">易错点速查 + 五道自测题</span></h1>
+  <p>配套《unsloth · vLLM · HF+PEFT 微调对照指南》的巩固练习，答案点击展开。</p>
+  <div class="tagline">
+    <span>易错点清单</span><span>5 道选择题</span><span>逐项讲解</span>
+    <span class="win">本轮战绩 5 / 5</span>
+  </div>
+</header>
+
+<!-- ============ 1 ============ -->
+<h2 id="s1">1. 易错点速查</h2>
+<div class="card">
+  <p><span class="cat">定位类</span></p>
+  <ul>
+    <li>unsloth <b>≠ 分布式多卡框架</b>，只管<b>单卡</b>优化；多卡还得配 DeepSpeed。</li>
+    <li>vLLM 是<b>纯推理引擎</b>，一点训练都不做，也<b>不是</b> unsloth 的依赖——只有 <code>fast_inference=True</code> 时才被借用。</li>
+    <li>unsloth <b>不是"基于 vLLM 微调"</b>：微调用自己的算子，推理才把 vLLM 当后端。</li>
+  </ul>
+
+  <p><span class="cat">关系类</span></p>
+  <ul>
+    <li>训练时 vLLM 基本<b>闲置</b>，只预占一块显存当引擎，别以为它在干活。</li>
+    <li>两者是「训练快 + 推理快」两条腿，<b>不是竞争</b>，各管一段流水线。</li>
+  </ul>
+
+  <p><span class="cat">权重类（最易错）</span></p>
+  <ul>
+    <li>训练结束的产物<b>不是完整模型</b>：基座冻结且可能 4bit，LoRA 只是几十 MB 的补丁。</li>
+    <li>vLLM / llama.cpp <b>读不了</b>这个训练态格式，必须先「转原生」三步：<b>merge</b>（<code>W = W₀ + B·A</code>）→ <b>反量化</b>回 fp16/bf16 → <b>按官方目录结构落盘</b>。</li>
+  </ul>
+
+  <p><span class="cat">代码类</span></p>
+  <ul>
+    <li>只有开了 <code>fast_inference=True</code> 才能用 <code>fast_generate</code>；没开就走 HF 原生 <code>model.generate</code>。</li>
+    <li><code>fast_generate</code> 吃<b>裸字符串</b>（内部自动 tokenize）；多模态必须<b>手动 tokenize</b> 并拼接图像向量。</li>
+    <li>多模态（Qwen-VL）<b>不适合</b> vLLM fast 接口，unsloth 对视觉模型退回 HF 原生接口——设计取舍，不是 bug。</li>
+  </ul>
+
+  <p><span class="cat">概念映射</span></p>
+  <table>
+    <tr><th>unsloth 版</th><th>HF + PEFT 版</th><th>职责</th></tr>
+    <tr><td><code>FastLanguageModel</code></td><td><code>AutoModelForCausalLM</code></td><td>加载基座（unsloth 顺带打包 4bit / vLLM）</td></tr>
+    <tr><td><code>get_peft_model</code></td><td><code>LoraConfig</code> + <code>get_peft_model</code></td><td>套 LoRA、冻结基座</td></tr>
+    <tr><td><code>GRPOTrainer</code></td><td><code>Trainer</code> / <code>SFTTrainer</code></td><td>训练循环</td></tr>
+  </table>
+  <div class="tip"><b>一句话记法：</b>unsloth 省训练，vLLM 省推理；训练产物是补丁，部署前必须转原生。</div>
+</div>
+
+<!-- ============ 2 ============ -->
+<h2 id="s2">2. 自测题 ①：unsloth 与 vLLM 的关系</h2>
+<div class="card">
+  <p>关于 unsloth 和 vLLM 的关系，下列说法<b>正确</b>的是：</p>
+  <ul class="opts">
+    <li><b>A.</b> unsloth 是基于 vLLM 构建的微调框架，训练时调用 vLLM 的算子</li>
+    <li><b>B.</b> vLLM 既能推理也能微调，unsloth 只是它的微调加速插件</li>
+    <li><b>C.</b> unsloth 微调时用自己的算子，推理时才通过 <code>fast_inference=True</code> 借用 vLLM 当后端</li>
+    <li><b>D.</b> 训练和推理都必须同时使用 unsloth + vLLM，二者强绑定</li>
+  </ul>
+  <details>
+    <summary>点击查看答案与讲解</summary>
+    <p><span class="ans">正确答案：C</span></p>
+    <p>微调阶段全靠 unsloth 自己的 TRITON 算子，vLLM 甚至在旁边闲着（只预占一块显存）；只有开了 <code>fast_inference=True</code>，它才被拉来当推理后端。</p>
+    <ul>
+      <li><b>A 错</b>：unsloth 不基于 vLLM，训练用的是自己的手写算子。</li>
+      <li><b>B 错</b>：vLLM 是纯推理引擎，不做任何训练。</li>
+      <li><b>D 错</b>：二者没有绑定。训练完转原生权重后，vLLM 可完全独立 <code>vllm serve</code> 部署。</li>
+    </ul>
+  </details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h2 id="s3">3. 自测题 ②：训练产物（adapter）</h2>
+<div class="card">
+  <p>用 unsloth/PEFT 做完 QLoRA 微调后，保存下来的 <code>adapter_model.safetensors</code>（几十 MB）。下列说法<b>正确</b>的是：</p>
+  <ul class="opts">
+    <li><b>A.</b> 这就是完整模型，vLLM 可以直接加载部署</li>
+    <li><b>B.</b> 它只是挂在冻结基座上的 LoRA 补丁，vLLM/llama.cpp 读不了；要先 merge 回基座、反量化、按标准目录格式落盘</li>
+    <li><b>C.</b> 它包含了基座的全部权重，只是压缩成了 4bit</li>
+    <li><b>D.</b> 能否部署取决于文件后缀，只要改成 <code>.gguf</code> 就能被 llama.cpp 加载</li>
+  </ul>
+  <details>
+    <summary>点击查看答案与讲解</summary>
+    <p><span class="ans">正确答案：B</span></p>
+    <p>核心一句：<b>LoRA 是补丁，不是模型</b>。部署前必须三步——merge（<code>W = W₀ + B·A</code>）→ 反量化回 fp16/bf16 → 按官方目录结构（<code>config.json</code> + <code>*.safetensors</code> + tokenizer）落盘。</p>
+    <ul>
+      <li><b>A 错</b>：adapter 文件里只有 LoRA 那两个小矩阵（B·A），基座权重根本不在里面。vLLM 加载时会因结构和大部分权重缺失而失败。</li>
+      <li><b>C 错</b>：方向反了。几十 MB 装不下基座——7B 模型就算 4bit 也要约 4GB。压成 4bit 的是<b>基座</b>，而基座是冻结的、压根没被存进 adapter。</li>
+      <li><b>D 错</b>：后缀只是"容器名字"，改名不改变内容。GGUF 有自己的结构规范，llama.cpp 需要专门工具链从<b>完整模型</b>转换。</li>
+    </ul>
+  </details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h2 id="s4">4. 自测题 ③：多模态推理</h2>
+<div class="card">
+  <p>你微调完 Qwen-VL 视觉模型（加载时没开 <code>fast_inference=True</code>），想测试生成效果。下列做法<b>正确</b>的是：</p>
+  <ul class="opts">
+    <li><b>A.</b> 直接 <code>model.fast_generate(图片, 文本)</code> 一把梭，vLLM 会自动处理</li>
+    <li><b>B.</b> 多模态不适合 vLLM 的 fast 接口；手动用 tokenizer 把图像+文本编码成张量，再走 <code>model.generate</code></li>
+    <li><b>C.</b> 视觉模型必须先转成 GGUF 格式才能推理</li>
+    <li><b>D.</b> 只要微调成功，<code>fast_inference</code> 会自动开启</li>
+  </ul>
+  <details>
+    <summary>点击查看答案与讲解</summary>
+    <p><span class="ans">正确答案：B</span></p>
+    <p>unsloth 的视觉模型底层就是 HF 那套：图片经视觉编码器算成向量、文本 tokenize 成 <code>input_ids</code>，手动组装张量喂给 <code>model.generate</code>。<code>fast_generate</code> 只是 <code>fast_inference=True</code> 时的 vLLM 捷径，多模态不支持，所以退回 HF 原生接口。</p>
+    <ul>
+      <li><b>A 错</b>：fast 接口没开 + 不支持视觉输入，两个条件都不满足。</li>
+      <li><b>C 错</b>：GGUF 是面向 llama.cpp 的部署格式，和"微调后测试"这一步无关；测试走 HF 原生即可。</li>
+      <li><b>D 错</b>：<code>fast_inference</code> 必须显式开启，不会自动生效。</li>
+    </ul>
+    <div class="note"><b>延伸：GGUF 是什么？</b>llama.cpp 生态的<b>单文件权重格式</b>——权重 + 元数据 + tokenizer 打包成一个文件，自带各种量化档位（Q4_K_M、Q8_0 等），服务消费级硬件（llama.cpp、Ollama、LM Studio 都吃它）。由<b>完整 HF 模型</b>经 llama.cpp 转换脚本生成。记忆锚点：<b>HF 目录是"官方发布格式"，GGUF 是"民间部署格式"，LoRA adapter 谁都不是，只是补丁。</b></div>
+  </details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h2 id="s5">5. 自测题 ④：纯 HF + PEFT 微调</h2>
+<div class="card">
+  <p>想完全不用 unsloth，纯用 HuggingFace 生态微调 Qwen 文本模型。下列做法<b>正确</b>的是：</p>
+  <ul class="opts">
+    <li><b>A.</b> <code>AutoModelForCausalLM.from_pretrained</code> 加载模型 → <code>LoraConfig</code> + <code>get_peft_model</code> 套 LoRA → <code>Trainer</code> 跑训练循环</li>
+    <li><b>B.</b> <code>get_peft_model</code> 会连训练循环一起接管，所以不需要 Trainer</li>
+    <li><b>C.</b> 纯 HF 微调必须装 bitsandbytes 做 4bit 量化，否则模型加载不了</li>
+    <li><b>D.</b> PEFT 负责加载模型，Transformers 负责提供 LoRA</li>
+  </ul>
+  <details>
+    <summary>点击查看答案与讲解</summary>
+    <p><span class="ans">正确答案：A</span></p>
+    <p>标准三件套：<b>Transformers 管加载和训练循环，PEFT 管 LoRA，Trainer 负责跑</b>。</p>
+    <ul>
+      <li><b>B 错</b>：<code>get_peft_model</code> 只干一件事——挂 LoRA 小模块、冻结基座。它管"哪些参数可训"，不管"怎么训"。梯度、优化器、checkpoint 全是 Trainer 的活。</li>
+      <li><b>C 错</b>：bitsandbytes 是<b>可选的显存优化</b>，只有做 QLoRA（4bit）才需要；bf16 原精度加载照样能训。</li>
+      <li><b>D 错</b>：职责整个说反了。加载模型的是 Transformers，提供 LoRA 的是 PEFT。</li>
+    </ul>
+  </details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h2 id="s6">6. 自测题 ⑤：为什么快的地方不同</h2>
+<div class="card">
+  <p>unsloth 和 vLLM 都号称"快"，但快的层面完全不同。下列说法<b>正确</b>的是：</p>
+  <ul class="opts">
+    <li><b>A.</b> 两者都快在算子级优化，只是分别用于训练和推理</li>
+    <li><b>B.</b> vLLM 快是因为它重写了反向传播的算子</li>
+    <li><b>C.</b> unsloth 优化的是"前向→反向→优化器"这条训练链路（算子级）；vLLM 优化的是多请求并发调度 + KV Cache 分页管理（调度级）</li>
+    <li><b>D.</b> 训练时也应该用 continuous batching 来提高 GPU 利用率</li>
+  </ul>
+  <details>
+    <summary>点击查看答案与讲解</summary>
+    <p><span class="ans">正确答案：C</span></p>
+    <p>坑就在 A——两者都"优化"，但<b>层面不同</b>。unsloth 改进每一台机器本身（算子级），vLLM 重新设计流水线和仓库调度（调度级）。</p>
+    <ul>
+      <li><b>A 错</b>：vLLM 完全没动任何算子，模型还是那个模型。</li>
+      <li><b>B 错</b>：vLLM 不碰训练，反向传播不存在于它的世界。</li>
+      <li><b>D 错</b>：训练一次只跑一个任务，没有"几十上百个请求排队"的场景，continuous batching 没有用武之地。</li>
+    </ul>
+    <div class="note"><b>延伸：算子是什么？</b>深度学习计算里<b>不能再拆的最小计算单元</b>——矩阵乘、加法、softmax、归一化、激活函数。PyTorch 里每个 <code>torch.matmul</code>、<code>F.softmax</code> 背后都对应一个算子，由 GPU 内核执行。<b>算子级优化</b> = 不改数学逻辑，只重写底层实现：unsloth 用 TRITON 手写融合内核，把几个操作合并、中间结果留在显存复用——输入输出完全一样，只是砍掉浪费的搬运。<b>调度级</b> = 算子不动，改"组织方式"：请求何时进出（continuous batching）、仓库空间怎么分页（PagedAttention 管 KV Cache）。类比工厂：unsloth 换更快的车床，vLLM 重新设计流水线。</div>
+  </details>
+</div>
+
+<!-- ============ 7 ============ -->
+<h2 id="s7">7. 记忆锚点汇总</h2>
+<div class="card">
+  <div class="anchor">
+    ① unsloth 省训练，vLLM 省推理；训练产物是补丁，部署前必须转原生。<br><br>
+    ② adapter 离开基座就是一堆无意义的小矩阵，谁也跑不了。<br><br>
+    ③ HF 目录是"官方发布格式"，GGUF 是"民间部署格式"，LoRA adapter 谁都不是。<br><br>
+    ④ Transformers = 骨架，PEFT = 补丁工具，两者互换不了角色。<br><br>
+    ⑤ 磁盘上永远没降过精度——4bit 只活在显存里，从加载进来到 merge 出去。<br><br>
+    ⑥ unsloth 换更快的车床（算子级），vLLM 重新设计流水线（调度级）。
+  </div>
+  <div class="tip"><b>最易在实操中踩的两个坑：</b>① 拿着 <code>adapter_model.safetensors</code> 直接找 vLLM 部署（必须先转原生）；② 多模态模型上调用 <code>fast_generate</code>（没开 <code>fast_inference</code> 且不支持视觉，走 <code>model.generate</code>）。</div>
+</div>
+
+<hr>
+<p style="color:var(--muted);font-size:.85em;text-align:center">巩固练习 · 配套《unsloth · vLLM · HF+PEFT 微调对照指南》· 2026-10</p>
+
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.sidebar a'));
+  var secs = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function onScroll(){
+    var y = window.scrollY + 130, cur = 0;
+    secs.forEach(function(s, i){ if (s && s.offsetTop <= y) cur = i; });
+    links.forEach(function(a, i){ a.classList.toggle('active', i === cur); });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+</body>
+</html>
