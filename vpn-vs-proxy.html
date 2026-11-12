@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>代理 vs VPN:报文之旅</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<!-- 本地优先:断网/内网环境下 jsDelivr 不可达,mermaid 加载不到时图表会退化成纯文本。
+     本文件同目录已放置 mermaid.min.js(v11);若该文件缺失,再回退到 CDN。 -->
+<script src="mermaid.min.js"
+        onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';document.head.appendChild(s)"></script>
 <style>
   :root {
     --ip: #7c3aed; --ip-bg: #ede9fe;
@@ -31,7 +34,8 @@
     background: #fff; border-radius: 12px; padding: 20px 24px; margin: 16px 0;
     box-shadow: 0 1px 3px rgba(0,0,0,.08);
   }
-  .mermaid { display: flex; justify-content: center; background: #fff; padding: 8px; border-radius: 8px; }
+  .mermaid { display: flex; justify-content: center; background: #fff; padding: 8px; border-radius: 8px; overflow-x: auto; }
+  .mermaid-fallback { display: block; color: var(--new); font-size: 13px; text-align: left; }
 
   /* ---- 报文结构条 ---- */
   .pkt { display: flex; width: 100%; margin: 6px 0; border: 2px solid var(--ink); border-radius: 6px; overflow: hidden; }
@@ -261,15 +265,39 @@ flowchart LR
 
 </div>
 <script>
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: "base",
-    themeVariables: {
-      primaryColor: "#eef2ff", primaryTextColor: "#1e293b",
-      primaryBorderColor: "#7c3aed", lineColor: "#64748b",
-      fontFamily: "Segoe UI, Microsoft YaHei, sans-serif", fontSize: "14px"
+(function () {
+  // mermaid 可能来自本地文件,也可能来自 onerror 后异步注入的 CDN 脚本,
+  // 所以这里轮询等待,而不是假设它此刻已就绪。
+  var tries = 0;
+  function boot() {
+    if (!window.mermaid) {
+      if (tries++ < 150) return setTimeout(boot, 100);
+      return fail("未能加载 mermaid.min.js(本地文件缺失且 CDN 不可达),图表无法渲染。");
     }
-  });
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "base",
+      themeVariables: {
+        primaryColor: "#eef2ff", primaryTextColor: "#1e293b",
+        primaryBorderColor: "#7c3aed", lineColor: "#64748b",
+        fontFamily: "Segoe UI, Microsoft YaHei, sans-serif", fontSize: "14px"
+      }
+    });
+    mermaid.run({ querySelector: ".mermaid" }).catch(function (e) {
+      console.error("[mermaid]", e);
+      fail("图表渲染失败:" + (e && e.message ? e.message : e));
+    });
+  }
+  function fail(msg) {
+    document.querySelectorAll(".mermaid").forEach(function (el) {
+      if (el.querySelector("svg")) return;
+      el.classList.add("mermaid-fallback");
+      el.textContent = "⚠ " + msg;
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+})();
 </script>
 </body>
 </html>
